@@ -78,7 +78,10 @@ def _install_router(cl, sudo, api_bind, api_port, token, version):
     # service runs as User=sni-router; hand it a readable (0640, owned) config
     ssh.put_root(cl, sudo, "/etc/sni-router/sni-router.yaml", cfg, mode="0640")
     ssh.run(cl, f"{sudo}chown sni-router:sni-router /etc/sni-router/sni-router.yaml")
-    code, log2 = ssh.run(cl, f"{sudo}systemctl enable --now sni-router")
+    # `enable --now` does NOT restart a unit their install.sh already started, so the
+    # freshly-written token config would never load (→ 401). enable, then restart.
+    ssh.run(cl, f"{sudo}systemctl enable sni-router >/dev/null 2>&1")
+    code, log2 = ssh.run(cl, f"{sudo}systemctl restart sni-router")
     log += "\n" + log2
     if code != 0:
         raise RuntimeError("starting sni-router failed:\n" + log2.strip())

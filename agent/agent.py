@@ -29,7 +29,7 @@ import subprocess
 import sys
 import time
 
-AGENT_VERSION = "1.5.0"
+AGENT_VERSION = "1.5.1"
 CONF_PATH = os.environ.get("SNI_AGENT_CONF", "/etc/sni-router-agent/agent.conf")
 
 
