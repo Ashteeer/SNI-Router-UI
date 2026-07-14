@@ -92,6 +92,17 @@ async def fetch_agent(host):
         return r.json()
 
 
+async def agent_update(host):
+    """Tell the host's agent to self-update (agent runs as root, execs the CLI
+    updater in a systemd transient scope). Returns the agent's JSON reply."""
+    port = host.get("agent_port") or 9110
+    url = f"http://{host['ip']}:{port}/update"
+    async with httpx.AsyncClient(timeout=15) as cl:
+        r = await cl.post(url, headers=_agent_headers(host))
+        r.raise_for_status()
+        return r.json()
+
+
 async def poll_host(host):
     values = {"up": 0}
     # /metrics is served on the unified api bind (same port + token as admin).

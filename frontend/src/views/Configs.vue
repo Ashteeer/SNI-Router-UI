@@ -2,6 +2,7 @@
 import { ref, watch, onMounted, nextTick } from 'vue'
 import jsyaml from 'js-yaml'
 import { api } from '../api'
+import { cidrRange } from '../ip'
 import Editor from '../components/Editor.vue'
 import VisualConfig from '../components/VisualConfig.vue'
 
@@ -15,7 +16,26 @@ const parseErr = ref('')
 const loadErr = ref('')
 const result = ref(null)
 const busy = ref('')
+const ips = ref([])
 let applying = false
+
+// Drop null/undefined so an absent section (e.g. `tls`) round-trips as *nothing*
+// rather than the literal `tls: null`, which sni-router would reject on save.
+function clean(v) {
+  if (Array.isArray(v)) return v.map(clean).filter((x) => x != null)
+  if (v && typeof v === 'object') {
+    const out = {}
+    for (const [k, val] of Object.entries(v)) {
+      const c = clean(val)
+      if (c != null) out[k] = c
+    }
+    return out
+  }
+  return v
+}
+function dump(m) {
+  return jsyaml.dump(clean(m) ?? {}, { lineWidth: -1, noRefs: true, sortKeys: false })
+}
 
 function applyText(text) {
   try {
@@ -38,9 +58,20 @@ async function load() {
     const text = await api.getConfig(props.hostId)
     yamlText.value = text
     applyText(text)
+    // re-emit through the null-stripping dumper so the manual view starts clean
+    if (!parseErr.value && model.value) yamlText.value = dump(model.value)
   } catch (e) {
     loadErr.value = e.message
   }
+}
+
+async function loadIps() {
+  ips.value = []
+  if (!props.hostId) return
+  try {
+    const a = await api.agentInfo(props.hostId)
+    ips.value = a.ips || []
+  } catch { /* agent may be down — just hide the IP hint */ }
 }
 
 // user edits in the manual editor -> parse into the model
@@ -49,16 +80,16 @@ function onEditorInput(text) {
   applyText(text)
 }
 
-// visual edits mutate the model -> re-serialize to the editor
+// visual edits mutate the model -> re-serialize to the editor (null-stripped)
 watch(model, () => {
   if (applying || !model.value) return
   try {
-    yamlText.value = jsyaml.dump(model.value, { lineWidth: -1, noRefs: true, sortKeys: false })
+    yamlText.value = dump(model.value)
   } catch { /* keep last good text */ }
 }, { deep: true })
 
-watch(() => props.hostId, load)
-onMounted(load)
+watch(() => props.hostId, () => { load(); loadIps() })
+onMounted(() => { load(); loadIps() })
 
 async function save() {
   busy.value = 'save'
@@ -90,6 +121,13 @@ const currentHost = () => props.hosts.find((h) => h.id === props.hostId)
 
 <template>
   <div>
+    <div v-if="ips.length" class="card mb-4 py-3">
+      <div class="label mb-1">IP addresses available on this server</div>
+      <div class="flex flex-wrap gap-x-4 gap-y-1 font-mono text-sm text-slate-300">
+        <span v-for="c in ips" :key="c">{{ cidrRange(c) }}</span>
+      </div>
+    </div>
+
     <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
       <div class="flex items-center gap-3">
         <select class="input w-auto" :value="hostId"

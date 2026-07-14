@@ -11,11 +11,17 @@ current.
 
 - **Dashboard** — per-host CPU / memory / network / connection charts (uPlot,
   drag-to-zoom, 1h–2d ranges) + stat tiles (uptime, active conns, disk, version).
-- **Hosts** — add/remove sni-router instances (name, admin IP, port, API token),
-  bulk delete, live Online/Offline check.
+  Bottom panel: software versions with **one-click self-update** (web UI + agent)
+  and the host's available IP addresses (mask-aware, shown as a range when the
+  mask covers more than one address).
+- **Hosts** — add/**edit**/remove sni-router instances (name, admin IP, port,
+  API token, agent port/token), bulk delete, live Online/Offline check. The
+  pencil edits a host in place; a blank token field keeps the stored one.
 - **Configs** — pick a host, edit its config in a **Visual** form or a **Manual**
   YAML editor (CodeMirror). The two stay in sync. Save (`PUT /config`) and
-  Restart (`POST /restart`) go straight to that host's admin API.
+  Restart (`POST /restart`) go straight to that host's admin API. Visual covers
+  `default_tls` (shared cert) and `log.level`; the header shows the host's IPs.
+  Absent sections are stripped (never serialized as `key: null`) before save.
 - **Settings** — edit the site's **local** config (`ui.conf`) + IP whitelist.
 - **Remote install** (Hosts tab) — install the metrics agent or sni-router on a
   remote host over SSH (paramiko), then save the host with its generated token.
@@ -29,8 +35,19 @@ Backend (FastAPI, one process)         ── serves built SPA + REST + poller
    │  http                              stores hosts + 2-day metrics in SQLite
    ├── sni-router admin API  (per host, IP:port, Bearer token)
    │      GET /status /config /metrics · PUT /config · POST /reload /restart
-   └── metrics agent         (per host, :9110, same token)  GET /sys
+   └── metrics agent         (per host, :9110, same token)  GET /sys · POST /update
 ```
+
+**Self-update:** the repo-root `VERSION` file is the single source of truth
+(bumped per release; the agent embeds it as `AGENT_VERSION`). The backend
+compares it to the latest GitHub release tag. Updating the web UI runs
+`sni-router-ui -u` in a **systemd transient scope** (`systemd-run --collect`) so
+the installer's own `systemctl restart` doesn't kill the updater by tearing down
+its cgroup. The agent's `POST /update` does the same with `sni-router-agent -u`,
+which is why the **agent now runs as root** (no `DynamicUser`) — it needs to
+write `/opt` and call `systemctl`. Both installers are update-safe: re-running
+them preserves the existing token/bind/port/DB. CLI: `sni-router-ui` /
+`sni-router-agent` each take `-u|--update`, `-v|--version`, `-h|--help`.
 
 Why an agent: the sni-router admin API exposes router stats only (connections,
 bytes, uptime). Host **CPU/RAM/disk/network** come from `agent/agent.py`, a
@@ -104,10 +121,11 @@ systemd units: `backend/sni-router-ui.service`, `agent/sni-router-agent.service`
 | `POST /setup` · `POST /login` · `POST /logout` | first-run / session |
 | `GET/PUT /settings` | IP whitelist |
 | `GET/PUT /config` | site's local config (`ui.conf`) |
+| `GET /version` · `POST /update/ui` | UI version/latest-check · self-update |
 | `POST /provision/agent` · `POST /provision/sni-router` | remote install over SSH |
-| `GET /hosts` · `POST /hosts` · `DELETE /hosts/{id}` · `POST /hosts/delete` | host CRUD |
-| `GET /hosts/{id}/status` · `/live` · `/history?range=1h\|6h\|24h\|48h` | metrics |
-| `GET/PUT /hosts/{id}/config` · `POST /hosts/{id}/reload\|restart` | config control (proxied w/ token) |
+| `GET /hosts` · `POST /hosts` · `PUT /hosts/{id}` · `DELETE /hosts/{id}` · `POST /hosts/delete` | host CRUD (PUT = edit) |
+| `GET /hosts/{id}/status` · `/live` · `/history?range=1h\|6h\|24h\|48h` · `/agent` | metrics · agent `/sys` (IPs+version) |
+| `GET/PUT /hosts/{id}/config` · `POST /hosts/{id}/reload\|restart\|agent-update` | config control · agent self-update |
 
 ## Config sync logic (Configs tab)
 

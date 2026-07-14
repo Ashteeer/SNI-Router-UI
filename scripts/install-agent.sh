@@ -61,6 +61,16 @@ resolve_ref() {
   esac
 }
 
+# Update/reinstall: keep the existing token/bind/port unless overridden on the CLI,
+# so `sni-router-agent -u` never breaks the host row already saved in the UI.
+if [ -f "$CONF" ]; then
+  # shellcheck disable=SC1090
+  . "$CONF" 2>/dev/null || true
+  [ -n "$TOKEN" ] || TOKEN="${SNI_AGENT_TOKEN:-}"
+  [ -n "$BIND" ]  || BIND="${SNI_AGENT_BIND:-}"
+  [ -n "$PORT" ]  || PORT="${SNI_AGENT_PORT:-}"
+fi
+
 [ -n "$BIND" ]  || BIND="0.0.0.0"
 [ -n "$PORT" ]  || PORT="$(rand_port)"
 [ -n "$TOKEN" ] || TOKEN="$(gen_token)"
@@ -91,11 +101,8 @@ EnvironmentFile=$CONF
 ExecStart=/usr/bin/python3 $INSTALL_DIR/agent.py
 Restart=on-failure
 RestartSec=3
-DynamicUser=yes
-NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=yes
-
+# Runs as root (no sandboxing): the agent's POST /update self-updates by running
+# the installer + systemctl, which needs root. Guard it with a strong token.
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -110,6 +117,23 @@ else
   echo "!! systemd not found — run manually:"
   echo "   SNI_AGENT_CONF=$CONF python3 $INSTALL_DIR/agent.py"
 fi
+
+# CLI: `sni-router-agent -u|--update  -v|--version  -h|--help`
+install -d -m 0755 /usr/local/bin
+cat > /usr/local/bin/sni-router-agent <<'WRAP'
+#!/usr/bin/env bash
+REPO="Ashteeer/SNI-Router-UI"
+case "${1:-}" in
+  -v|--version) python3 /opt/sni-router-agent/agent.py version 2>/dev/null || echo unknown ;;
+  -u|--update)  curl -fsSL "https://raw.githubusercontent.com/$REPO/main/scripts/install-agent.sh" | bash -s -- "${@:2}" ;;
+  -h|--help|"") printf '%s\n' "sni-router-agent — metrics agent control" \
+                  "  -u, --update    update to the latest release (keeps token/port)" \
+                  "  -v, --version   print installed version" \
+                  "  -h, --help      show this help" ;;
+  *) echo "unknown option: $1" >&2; exit 1 ;;
+esac
+WRAP
+chmod 0755 /usr/local/bin/sni-router-agent
 
 HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"; [ -n "$HOST_IP" ] || HOST_IP="<host-ip>"
 SHOW_IP="$BIND"; [ "$BIND" = "0.0.0.0" ] && SHOW_IP="$HOST_IP"

@@ -57,6 +57,18 @@ resolve_ref() {
   esac
 }
 
+# Update/reinstall: keep the existing bind + DB path unless -s overrides them,
+# so `sni-router-ui -u` doesn't move the port or the database out from under you.
+DB_PATH=""
+if [ -f "$CONF" ]; then
+  # shellcheck disable=SC1090
+  . "$CONF" 2>/dev/null || true
+  [ -n "$HOST" ] || HOST="${SNI_UI_HOST:-}"
+  [ -n "$PORT" ] || PORT="${SNI_UI_PORT:-}"
+  DB_PATH="${SNI_UI_DB:-}"
+fi
+[ -n "$DB_PATH" ] || DB_PATH="$DATA_DIR/sni-ui.db"
+
 [ -n "$HOST" ] || HOST="0.0.0.0"
 [ -n "$PORT" ] || PORT="$(rand_port)"
 REF="$(resolve_ref "$VERSION")"
@@ -92,7 +104,7 @@ cat > "$CONF" <<EOF
 # SNI-Router UI site config — written by install-site.sh
 SNI_UI_HOST=$HOST
 SNI_UI_PORT=$PORT
-SNI_UI_DB=$DATA_DIR/sni-ui.db
+SNI_UI_DB=$DB_PATH
 EOF
 
 if command -v systemctl >/dev/null 2>&1; then
@@ -122,6 +134,23 @@ else
   echo "!! systemd not found — run manually:"
   echo "   cd $INSTALL_DIR/backend && SNI_UI_CONF=$CONF .venv/bin/uvicorn app:app --host $HOST --port $PORT"
 fi
+
+# CLI: `sni-router-ui -u|--update  -v|--version  -h|--help`
+install -d -m 0755 /usr/local/bin
+cat > /usr/local/bin/sni-router-ui <<'WRAP'
+#!/usr/bin/env bash
+REPO="Ashteeer/SNI-Router-UI"
+case "${1:-}" in
+  -v|--version) cat /opt/sni-router-ui/VERSION 2>/dev/null || echo unknown ;;
+  -u|--update)  curl -fsSL "https://raw.githubusercontent.com/$REPO/main/scripts/install-site.sh" | bash -s -- "${@:2}" ;;
+  -h|--help|"") printf '%s\n' "sni-router-ui — web UI control" \
+                  "  -u, --update    update to the latest release (keeps bind + database)" \
+                  "  -v, --version   print installed version" \
+                  "  -h, --help      show this help" ;;
+  *) echo "unknown option: $1" >&2; exit 1 ;;
+esac
+WRAP
+chmod 0755 /usr/local/bin/sni-router-ui
 
 HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"; [ -n "$HOST_IP" ] || HOST_IP="<host-ip>"
 SHOW_IP="$HOST"; [ "$HOST" = "0.0.0.0" ] && SHOW_IP="$HOST_IP"

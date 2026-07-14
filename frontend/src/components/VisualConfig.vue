@@ -238,6 +238,18 @@ function addRule(be) { ensure(be, 'http_rules', []).push({ path: '/', action: 'r
         <input :value="model.api?.token" class="input" placeholder="Bearer token"
           @input="ensure(model, 'api', {}).token = $event.target.value" />
       </div>
+      <div class="card">
+        <h3 class="mb-1 text-sm font-semibold uppercase tracking-wide text-slate-400">Default TLS</h3>
+        <p class="mb-3 text-xs text-slate-500">
+          Shared cert for any <code>terminate</code> backend that has no <code>tls</code> of its own.
+        </p>
+        <label class="label">default_tls.cert path</label>
+        <input :value="model.default_tls?.cert" class="input mb-3" placeholder="/etc/ssl/fullchain.pem"
+          @input="ensure(model, 'default_tls', {}).cert = $event.target.value" />
+        <label class="label">default_tls.key path</label>
+        <input :value="model.default_tls?.key" class="input" placeholder="/etc/ssl/privkey.pem"
+          @input="ensure(model, 'default_tls', {}).key = $event.target.value" />
+      </div>
     </section>
   </div>
 </template>

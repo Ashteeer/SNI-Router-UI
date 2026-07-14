@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { api } from '../api'
+import { cidrRange, verNewer } from '../ip'
 import UChart from '../components/UChart.vue'
 
 const props = defineProps({ hosts: Array, hostId: Number })
@@ -10,6 +11,10 @@ const range = ref('1h')
 const hist = ref(null)
 const live = ref(null)
 const err = ref('')
+const agent = ref(null)     // { ips, version, ... } from the host's metrics agent
+const sys = ref(null)       // { ui, latest, update_available } — web UI self-version
+const updating = ref('')    // '' | 'ui' | 'agent'
+const updateMsg = ref('')
 let liveTimer = null
 let histTimer = null
 
@@ -47,6 +52,35 @@ async function loadLive() {
   if (!props.hostId) return
   try { live.value = await api.live(props.hostId) } catch (e) { err.value = e.message }
 }
+async function loadAgent() {
+  agent.value = null
+  if (!props.hostId) return
+  try { agent.value = await api.agentInfo(props.hostId) } catch { /* agent down: hide panel */ }
+}
+async function loadVersion() {
+  try { sys.value = await api.version() } catch { /* offline: no update prompt */ }
+}
+
+const agentUpdate = computed(() =>
+  !!(sys.value?.latest && agent.value?.version && verNewer(sys.value.latest, agent.value.version)))
+
+async function doUpdateUi() {
+  if (!confirm('Update the web UI to ' + sys.value.latest + '? It will restart itself.')) return
+  updating.value = 'ui'
+  try {
+    await api.updateUi()
+    updateMsg.value = 'Web UI is updating — it will restart. Reload this page in ~30–60s.'
+  } catch (e) { updateMsg.value = 'Update failed: ' + e.message; updating.value = '' }
+}
+async function doUpdateAgent() {
+  if (!confirm('Update the agent on this host to ' + sys.value.latest + '?')) return
+  updating.value = 'agent'
+  try {
+    await api.updateAgent(props.hostId)
+    updateMsg.value = 'Agent is updating — it will restart. Version refreshes shortly.'
+    setTimeout(() => { loadAgent(); updating.value = '' }, 15000)
+  } catch (e) { updateMsg.value = 'Update failed: ' + e.message; updating.value = '' }
+}
 
 const cpuData = computed(() => hist.value ? [hist.value.ts, hist.value.cpu_pct] : [[]])
 const memData = computed(() => {
@@ -70,11 +104,11 @@ const tiles = computed(() => [
   { label: 'Version', value: live.value?.status?.version || '—' },
 ])
 
-watch(() => props.hostId, () => { hist.value = null; live.value = null; loadHistory(); loadLive() })
+watch(() => props.hostId, () => { hist.value = null; live.value = null; loadHistory(); loadLive(); loadAgent() })
 watch(range, loadHistory)
 
 onMounted(() => {
-  loadHistory(); loadLive()
+  loadHistory(); loadLive(); loadAgent(); loadVersion()
   liveTimer = setInterval(loadLive, 5000)
   histTimer = setInterval(loadHistory, 15000)
 })
@@ -133,6 +167,46 @@ onBeforeUnmount(() => { clearInterval(liveTimer); clearInterval(histTimer) })
         <UChart title="Active connections" :data="connData"
           :series="[{ label: 'Conns', stroke: '#a78bfa', fill: 'rgba(167,139,250,.15)' }]"
           :yfmt="(v) => (v == null ? '—' : v)" />
+      </div>
+
+      <!-- System: versions/update + available IPs -->
+      <div class="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div class="card">
+          <h3 class="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">Software version</h3>
+          <div class="flex items-center justify-between gap-3 border-b border-slate-800 py-2">
+            <div>
+              <div class="text-sm text-slate-300">Web UI</div>
+              <div class="text-xs text-slate-500">
+                installed {{ sys?.ui || '—' }}<span v-if="sys?.latest"> · latest {{ sys.latest }}</span>
+              </div>
+            </div>
+            <button v-if="sys?.update_available" class="btn-primary" :disabled="updating"
+              @click="doUpdateUi">{{ updating === 'ui' ? 'Updating…' : 'Update' }}</button>
+            <span v-else-if="sys" class="text-xs text-emerald-400">up to date</span>
+          </div>
+          <div class="flex items-center justify-between gap-3 py-2">
+            <div>
+              <div class="text-sm text-slate-300">Agent (this host)</div>
+              <div class="text-xs text-slate-500">
+                {{ agent?.version ? 'installed ' + agent.version : 'agent offline / not reporting' }}
+              </div>
+            </div>
+            <button v-if="agentUpdate" class="btn-primary" :disabled="updating"
+              @click="doUpdateAgent">{{ updating === 'agent' ? 'Updating…' : 'Update' }}</button>
+            <span v-else-if="agent?.version" class="text-xs text-emerald-400">up to date</span>
+          </div>
+          <p v-if="updateMsg" class="mt-2 rounded-lg bg-brand/10 px-3 py-2 text-sm text-brand">{{ updateMsg }}</p>
+        </div>
+
+        <div class="card">
+          <h3 class="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
+            IP addresses available on this server
+          </h3>
+          <div v-if="agent?.ips?.length" class="flex flex-wrap gap-x-4 gap-y-1 font-mono text-sm text-slate-300">
+            <span v-for="c in agent.ips" :key="c">{{ cidrRange(c) }}</span>
+          </div>
+          <p v-else class="text-sm text-slate-500">No agent data — install/enable the metrics agent on this host.</p>
+        </div>
       </div>
     </template>
   </div>

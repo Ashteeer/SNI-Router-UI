@@ -12,9 +12,11 @@ import json
 import os
 import re
 import secrets
+import subprocess
 import time
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
@@ -25,7 +27,9 @@ import db
 import provision
 
 SESSION_TTL = 7 * 86400  # 7 days
-DIST = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
+ROOT = os.path.join(os.path.dirname(__file__), "..")
+DIST = os.path.join(ROOT, "frontend", "dist")
+REPO = "Ashteeer/SNI-Router-UI"
 
 
 # ---------- auth primitives (stdlib only) ----------
@@ -130,6 +134,53 @@ def require_host(host_id: int):
     return host
 
 
+# ---------- version / self-update ----------
+def ui_version():
+    try:
+        with open(os.path.join(ROOT, "VERSION")) as f:
+            return f.read().strip()
+    except OSError:
+        return "unknown"
+
+
+def _ver_tuple(v):
+    return tuple(int(x) for x in re.findall(r"\d+", v or ""))
+
+
+def version_newer(latest, current):
+    lt, ct = _ver_tuple(latest), _ver_tuple(current)
+    return bool(lt) and lt > ct
+
+
+_latest = {"tag": None, "at": 0.0}
+
+
+async def latest_release():
+    if _latest["tag"] and time.time() - _latest["at"] < 3600:
+        return _latest["tag"]
+    try:
+        async with httpx.AsyncClient(timeout=8) as cl:
+            r = await cl.get(f"https://api.github.com/repos/{REPO}/releases/latest")
+            tag = r.json().get("tag_name")
+    except Exception:
+        tag = None
+    if tag:
+        _latest.update(tag=tag, at=time.time())
+    return _latest["tag"]
+
+
+def _spawn_update(unit, cmd):
+    """Run a self-update outside our own service cgroup so the installer's
+    `systemctl restart` doesn't kill it mid-run. ponytail: systemd-run needs the
+    UI service to run as root (it does); setsid is a best-effort fallback."""
+    try:
+        subprocess.Popen(["systemd-run", "--collect", f"--unit={unit}", *cmd],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except FileNotFoundError:
+        subprocess.Popen(f"setsid {' '.join(cmd)} >/tmp/{unit}.log 2>&1",
+                         shell=True, start_new_session=True)
+
+
 # ---------- app ----------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -218,6 +269,20 @@ async def put_config_local(request: Request, user=Depends(require_auth)):
     return {"ok": True, "values": values, "restart_required": True}
 
 
+# ---------- version / self-update ----------
+@app.get("/api/version")
+async def version(user=Depends(require_auth)):
+    cur = ui_version()
+    latest = await latest_release()
+    return {"ui": cur, "latest": latest, "update_available": version_newer(latest, cur)}
+
+
+@app.post("/api/update/ui")
+def update_ui(user=Depends(require_auth)):
+    _spawn_update("sni-router-ui-update", ["/usr/local/bin/sni-router-ui", "-u"])
+    return {"updating": True}
+
+
 # ---------- discover a sni-router config on THIS host (Add Host convenience) ----------
 # ponytail: regex parse of the api block — no YAML dep for two fields.
 LOCAL_ROUTER_CONFIGS = ["/etc/sni-router/sni-router.yaml", "/etc/sni-router/sni-router.yml"]
@@ -274,6 +339,17 @@ async def create_host(request: Request, user=Depends(require_auth)):
     hid = db.add_host(d["name"], d["ip"], d["port"], d.get("token", ""),
                       d.get("agent_port", 9110), d.get("agent_token", ""))
     return _host_public(db.get_host(hid))
+
+
+@app.put("/api/hosts/{host_id}")
+async def edit_host(host_id: int, request: Request, user=Depends(require_auth)):
+    require_host(host_id)
+    d = await request.json()
+    # only the keys actually sent are changed — a blank token field means "keep"
+    fields = {k: d[k] for k in ("name", "ip", "port", "token", "agent_port", "agent_token")
+              if k in d and d[k] is not None}
+    db.update_host(host_id, **fields)
+    return _host_public(db.get_host(host_id))
 
 
 @app.post("/api/hosts/delete")
@@ -362,6 +438,26 @@ async def put_config(host_id: int, request: Request, user=Depends(require_auth))
         return Response(r.text, status_code=r.status_code, media_type=r.headers.get("content-type", "application/json"))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"host unreachable: {e}")
+
+
+# ---------- metrics agent (host CPU/RAM/net + IPs + version) ----------
+@app.get("/api/hosts/{host_id}/agent")
+async def host_agent(host_id: int, user=Depends(require_auth)):
+    host = require_host(host_id)
+    try:
+        return await collector.fetch_agent(host)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"agent unreachable: {e}")
+
+
+# declared before the {action} catch-all so it isn't swallowed as an "action"
+@app.post("/api/hosts/{host_id}/agent-update")
+async def host_agent_update(host_id: int, user=Depends(require_auth)):
+    host = require_host(host_id)
+    try:
+        return await collector.agent_update(host)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"agent unreachable: {e}")
 
 
 @app.post("/api/hosts/{host_id}/{action}")

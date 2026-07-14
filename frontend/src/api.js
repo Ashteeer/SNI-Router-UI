@@ -41,8 +41,15 @@ export const api = {
 
   hosts: () => req('GET', '/hosts'),
   addHost: (d) => req('POST', '/hosts', d),
+  updateHost: (id, d) => req('PUT', '/hosts/' + id, d),
   deleteHost: (id) => req('DELETE', '/hosts/' + id),
   deleteHosts: (ids) => req('POST', '/hosts/delete', { ids }),
+
+  // version + self-update
+  version: () => req('GET', '/version'),
+  updateUi: () => req('POST', '/update/ui'),
+  agentInfo: (id) => req('GET', `/hosts/${id}/agent`),
+  updateAgent: (id) => req('POST', `/hosts/${id}/agent-update`),
 
   status: (id) => req('GET', `/hosts/${id}/status`),
   live: (id) => req('GET', `/hosts/${id}/live`),

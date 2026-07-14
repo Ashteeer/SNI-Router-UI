@@ -9,10 +9,33 @@ const emit = defineEmits(['changed'])
 const checked = ref(new Set())
 const status = ref({}) // id -> 'online' | 'offline' | 'checking'
 const showAdd = ref(false)
+const editId = ref(null) // null = adding a new host, else editing this id
 const form = ref({ name: '', ip: '', port: 9901, token: '', agent_port: 9110, agent_token: '' })
 const addErr = ref('')
 const busy = ref(false)
 const discovering = ref(false)
+
+function blankForm() {
+  return { name: '', ip: '', port: 9901, token: '', agent_port: 9110, agent_token: '' }
+}
+function openAdd() {
+  editId.value = null
+  form.value = blankForm()
+  addErr.value = ''
+  showAdd.value = true
+}
+function openEdit(h) {
+  editId.value = h.id
+  // tokens aren't returned by the API (only has_token) — leave blank = keep existing
+  form.value = { name: h.name, ip: h.ip, port: h.port, token: '',
+                 agent_port: h.agent_port, agent_token: '' }
+  addErr.value = ''
+  showAdd.value = true
+}
+function closeModal() {
+  showAdd.value = false
+  editId.value = null
+}
 
 async function discoverLocal() {
   addErr.value = ''
@@ -107,13 +130,21 @@ async function pingAll() {
   }
 }
 
-async function addHost() {
+async function saveHost() {
   addErr.value = ''
   busy.value = true
   try {
-    await api.addHost(form.value)
-    showAdd.value = false
-    form.value = { name: '', ip: '', port: 9901, token: '', agent_port: 9110, agent_token: '' }
+    if (editId.value != null) {
+      // send tokens only when filled — blank means "keep the stored one"
+      const f = form.value
+      const payload = { name: f.name, ip: f.ip, port: f.port, agent_port: f.agent_port }
+      if (f.token) payload.token = f.token
+      if (f.agent_token) payload.agent_token = f.agent_token
+      await api.updateHost(editId.value, payload)
+    } else {
+      await api.addHost(form.value)
+    }
+    closeModal()
     emit('changed')
     setTimeout(pingAll, 300)
   } catch (e) {
@@ -148,7 +179,7 @@ onMounted(pingAll)
           Delete selected ({{ checked.size }})
         </button>
         <button class="btn-ghost" @click="openInstall">⇩ Remote install</button>
-        <button class="btn-primary" @click="showAdd = true">+ Add Host</button>
+        <button class="btn-primary" @click="openAdd">+ Add Host</button>
       </div>
     </div>
 
@@ -180,11 +211,18 @@ onMounted(pingAll)
               </span>
             </td>
             <td class="p-3">
-              <button class="text-red-500 hover:text-red-400" title="Delete" @click="removeOne(h.id)">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M3 6h18M8 6V4h8v2m-9 0v14a2 2 0 002 2h6a2 2 0 002-2V6M10 11v6M14 11v6" />
-                </svg>
-              </button>
+              <div class="flex items-center gap-3">
+                <button class="text-slate-400 hover:text-slate-200" title="Edit" @click="openEdit(h)">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 20h9M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4 12.5-12.5z" />
+                  </svg>
+                </button>
+                <button class="text-red-500 hover:text-red-400" title="Delete" @click="removeOne(h.id)">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M3 6h18M8 6V4h8v2m-9 0v14a2 2 0 002 2h6a2 2 0 002-2V6M10 11v6M14 11v6" />
+                  </svg>
+                </button>
+              </div>
             </td>
           </tr>
           <tr v-if="!hosts.length">
@@ -194,23 +232,23 @@ onMounted(pingAll)
       </table>
     </div>
 
-    <!-- Add modal -->
+    <!-- Add / Edit modal -->
     <div v-if="showAdd" class="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4"
-         @click.self="showAdd = false">
+         @click.self="closeModal">
       <div class="card w-full max-w-md">
         <div class="mb-4 flex items-center justify-between">
-          <h2 class="text-lg font-semibold text-slate-100">Add Host</h2>
-          <button class="text-slate-400 hover:text-slate-200" @click="showAdd = false">
+          <h2 class="text-lg font-semibold text-slate-100">{{ editId != null ? 'Edit Host' : 'Add Host' }}</h2>
+          <button class="text-slate-400 hover:text-slate-200" @click="closeModal">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M18 6 6 18M6 6l12 12" />
             </svg>
           </button>
         </div>
-        <button type="button" class="btn-ghost mb-4 w-full justify-center" :disabled="discovering"
-                @click="discoverLocal">
+        <button v-if="editId == null" type="button" class="btn-ghost mb-4 w-full justify-center"
+                :disabled="discovering" @click="discoverLocal">
           {{ discovering ? 'Searching…' : '🔍 Find local sni-router config' }}
         </button>
-        <form @submit.prevent="addHost">
+        <form @submit.prevent="saveHost">
           <label class="label">Server Name</label>
           <input v-model="form.name" class="input mb-3" required />
           <div class="mb-3 grid grid-cols-3 gap-3">
@@ -224,17 +262,19 @@ onMounted(pingAll)
             </div>
           </div>
           <label class="label">API Token (required for save/restart)</label>
-          <PasswordInput v-model="form.token" class="mb-3" placeholder="Bearer token" />
+          <PasswordInput v-model="form.token" class="mb-3"
+            :placeholder="editId != null ? 'leave blank to keep current token' : 'Bearer token'" />
           <div class="mb-3">
             <label class="label">Agent port</label>
             <input v-model.number="form.agent_port" type="number" class="input" />
           </div>
           <label class="label">Agent token (blank = same as API token)</label>
-          <PasswordInput v-model="form.agent_token" class="mb-3" placeholder="leave blank to reuse API token" />
+          <PasswordInput v-model="form.agent_token" class="mb-3"
+            :placeholder="editId != null ? 'leave blank to keep current agent token' : 'leave blank to reuse API token'" />
           <p v-if="addErr" class="mb-3 rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-400">{{ addErr }}</p>
           <div class="flex justify-end gap-2">
-            <button type="button" class="btn-ghost" @click="showAdd = false">Close</button>
-            <button class="btn-primary" :disabled="busy">Add</button>
+            <button type="button" class="btn-ghost" @click="closeModal">Close</button>
+            <button class="btn-primary" :disabled="busy">{{ editId != null ? 'Save' : 'Add' }}</button>
           </div>
         </form>
       </div>

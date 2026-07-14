@@ -24,9 +24,11 @@ import http.server
 import json
 import os
 import socketserver
+import subprocess
 import sys
 import time
 
+AGENT_VERSION = "1.4.0"
 CONF_PATH = os.environ.get("SNI_AGENT_CONF", "/etc/sni-router-agent/agent.conf")
 
 
@@ -105,12 +107,39 @@ def netinfo():
     return rx, tx
 
 
+_ips_cache = {"at": 0, "val": []}
+
+
+def ip_addrs():
+    """IPv4 addresses assigned on this host as CIDR strings (e.g. ["1.2.3.4/24"]).
+    ponytail: shells out to `ip` (present on any modern Linux) and caches 60s so
+    the 5s poller doesn't fork every tick; loopback dropped."""
+    now = time.time()
+    if now - _ips_cache["at"] < 60:
+        return _ips_cache["val"]
+    out = []
+    try:
+        text = subprocess.check_output(["ip", "-o", "-4", "addr", "show"], text=True)
+        for line in text.splitlines():
+            f = line.split()
+            # "2: eth0    inet 1.2.3.4/24 brd ..." — take the token after `inet`
+            if "inet" in f and f[1] != "lo":
+                cidr = f[f.index("inet") + 1]
+                if not cidr.startswith("127."):
+                    out.append(cidr)
+    except Exception:
+        pass
+    _ips_cache.update(at=now, val=out)
+    return out
+
+
 def sample():
     mem_total, mem_used = meminfo()
     disk_total, disk_used = diskinfo()
     rx, tx = netinfo()
     return {
         "ts": int(time.time()),
+        "version": AGENT_VERSION,
         "cpu_pct": cpu_percent(),
         "mem_total": mem_total,
         "mem_used": mem_used,
@@ -118,32 +147,62 @@ def sample():
         "disk_used": disk_used,
         "net_rx": rx,
         "net_tx": tx,
+        "ips": ip_addrs(),
         "load1": round(os.getloadavg()[0], 2),
         "ncpu": os.cpu_count(),
     }
 
 
+def start_update():
+    """Fire the CLI updater in its own systemd transient scope so the agent's
+    own `systemctl restart` (inside install-agent.sh) doesn't kill the updater
+    mid-run by tearing down this unit's cgroup. Falls back to setsid.
+    ponytail: needs the agent to run as root (it does) to write /opt + systemctl."""
+    try:
+        subprocess.Popen(
+            ["systemd-run", "--collect", "--unit=sni-router-agent-update",
+             "/usr/local/bin/sni-router-agent", "-u"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        subprocess.Popen(
+            "setsid /usr/local/bin/sni-router-agent -u >/tmp/sni-agent-update.log 2>&1",
+            shell=True, start_new_session=True,
+        )
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-        if TOKEN and self.headers.get("Authorization") != f"Bearer {TOKEN}":
-            self.send_response(401)
-            self.end_headers()
-            return
-        if self.path.split("?")[0] != "/sys":
-            self.send_response(404)
-            self.end_headers()
-            return
-        try:
-            body = json.dumps(sample()).encode()
-        except Exception as e:  # noqa: BLE001 — report, don't crash the thread
-            body = json.dumps({"error": str(e)}).encode()
-            self.send_response(500)
-        else:
-            self.send_response(200)
+    def _auth_ok(self):
+        return not TOKEN or self.headers.get("Authorization") == f"Bearer {TOKEN}"
+
+    def _json(self, code, obj):
+        body = json.dumps(obj).encode()
+        self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def do_GET(self):
+        if not self._auth_ok():
+            self.send_response(401); self.end_headers(); return
+        if self.path.split("?")[0] != "/sys":
+            self.send_response(404); self.end_headers(); return
+        try:
+            self._json(200, sample())
+        except Exception as e:  # noqa: BLE001 — report, don't crash the thread
+            self._json(500, {"error": str(e)})
+
+    def do_POST(self):
+        if not self._auth_ok():
+            self.send_response(401); self.end_headers(); return
+        if self.path.split("?")[0] != "/update":
+            self.send_response(404); self.end_headers(); return
+        try:
+            start_update()
+            self._json(200, {"updating": True, "version": AGENT_VERSION})
+        except Exception as e:  # noqa: BLE001
+            self._json(500, {"error": str(e)})
 
     def log_message(self, *args):
         pass  # quiet
@@ -164,7 +223,10 @@ def selftest():
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "selftest":
+    arg = sys.argv[1] if len(sys.argv) > 1 else ""
+    if arg == "selftest":
         selftest()
+    elif arg in ("version", "--version", "-v"):
+        print(AGENT_VERSION)
     else:
         Server((BIND, PORT), Handler).serve_forever()
