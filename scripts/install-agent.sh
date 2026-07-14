@@ -6,10 +6,11 @@
 #   -v, --version <ver>   GitHub tag to install (default: latest release, else main)
 #   -a <IP:PORT>          bind address (default: 0.0.0.0 : random free port)
 #   -t, --token <token>   bearer token (default: auto-generated)
+#   --purge               clean install: wipe any existing agent dir/config first
 #   -h, --help
 #
 # Prints  IP:PORT  and  token  at the end — paste them into the UI's Add Host
-# form, or let the UI run this for you over SSH (Hosts → Install agent).
+# form, or let the UI run this for you over SSH (Hosts → Remote install).
 set -euo pipefail
 
 REPO="Ashteeer/SNI-Router-UI"
@@ -18,7 +19,7 @@ CONF_DIR="/etc/sni-router-agent"
 CONF="$CONF_DIR/agent.conf"
 UNIT="/etc/systemd/system/sni-router-agent.service"
 
-VERSION="" BIND="" PORT="" TOKEN=""
+VERSION="" BIND="" PORT="" TOKEN="" PURGE=""
 
 die() { echo "error: $*" >&2; exit 1; }
 
@@ -31,7 +32,8 @@ while [ $# -gt 0 ]; do
                     *)   BIND="$A" ;;
                   esac ;;
     -t|--token)   TOKEN="${2:-}"; shift 2 ;;
-    -h|--help)    sed -n '2,14p' "$0"; exit 0 ;;
+    --purge)      PURGE=1; shift ;;
+    -h|--help)    sed -n '2,15p' "$0"; exit 0 ;;
     *)            die "unknown argument: $1" ;;
   esac
 done
@@ -39,6 +41,16 @@ done
 [ "$(id -u)" -eq 0 ] || die "run as root (sudo)."
 command -v python3 >/dev/null 2>&1 || die "python3 is required."
 command -v curl    >/dev/null 2>&1 || die "curl is required."
+
+# --purge = clean install: tear down any existing agent so nothing old lingers.
+# (In-dashboard version updates run WITHOUT --purge and keep token/bind/port.)
+if [ -n "$PURGE" ]; then
+  echo ">> clean install: removing existing agent (dir, config, unit)"
+  systemctl disable --now sni-router-agent.service >/dev/null 2>&1 || true
+  rm -f "$UNIT"
+  command -v systemctl >/dev/null 2>&1 && systemctl daemon-reload >/dev/null 2>&1 || true
+  rm -rf "$INSTALL_DIR" "$CONF_DIR"
+fi
 
 gen_token() { openssl rand -hex 24 2>/dev/null || head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
 

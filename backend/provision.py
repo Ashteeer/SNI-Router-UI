@@ -1,11 +1,14 @@
-"""Remote provisioning: install the agent or sni-router on a host over SSH.
+"""Remote provisioning: clean-install the agent and/or sni-router over SSH.
 
-Triggered by an authenticated UI user (Hosts → Install …). SSH credentials are
-passed per request and never persisted — see ssh.py. Each function is blocking
+Triggered by an authenticated UI user (Hosts → Remote install). SSH credentials
+are passed per request and never persisted — see ssh.py. `provision()` is blocking
 and is called from the endpoint via asyncio.to_thread.
 
-ponytail: the agent installer script is uploaded and executed as-is (same
-version as this site), so there's no second copy of the install logic here.
+Remote install is always a **clean install**: the agent installer runs with
+`--purge` (wipes old dirs/config) and the router's config is wiped + rewritten,
+so a fresh token/bind replaces whatever was there. In-dashboard version updates
+(`sni-router-ui -u`, the agent's POST /update) take the opposite path and preserve
+config. ponytail: the installer scripts hold the install logic — we just drive them.
 """
 import os
 import secrets
@@ -36,42 +39,6 @@ def _connect(s):
     )
 
 
-def provision_agent(p):
-    """Upload + run scripts/install-agent.sh on the target, then record the host."""
-    s = p["ssh"]
-    user = s.get("user", "root")
-    sudo = _sudo(user)
-    token = p.get("token") or gen_token()
-    bind = p.get("agent_bind") or "0.0.0.0"
-    port = int(p.get("agent_port") or rand_port())
-    version = (p.get("version") or "").strip()
-
-    with open(os.path.join(SCRIPTS, "install-agent.sh"), encoding="utf-8") as f:
-        script = f.read()
-
-    cl = _connect(s)
-    try:
-        ssh.put(cl, "/tmp/install-agent.sh", script)
-        args = f"-a {bind}:{port} -t {token}"
-        if version:
-            args += f" -v {version}"
-        code, log = ssh.run(cl, f"{sudo}bash /tmp/install-agent.sh {args}; rm -f /tmp/install-agent.sh")
-    finally:
-        cl.close()
-    if code != 0:
-        raise RuntimeError(log.strip() or "agent install failed")
-
-    host_id = p.get("host_id")
-    if host_id:
-        db.update_host(host_id, agent_port=port, token=token)
-    else:
-        host_id = db.add_host(
-            p.get("name") or s["host"], s["host"], p.get("api_port", 9901),
-            token=token, agent_port=port,
-        )
-    return {"ok": True, "host_id": host_id, "agent_port": port, "token": token, "log": log}
-
-
 def base_router_config(api_bind, api_port, token):
     """Minimal valid sni-router config: an API-only config (no listeners/backends)
     exposing the unified api (config + metrics + control) on an external interface
@@ -85,40 +52,86 @@ api:
 """
 
 
-def provision_sni_router(p):
-    """Install sni-router (their install.sh), drop a base config exposing the
-    api (one bind, one token) on an external IP, then enable+start; record host."""
-    s = p["ssh"]
-    user = s.get("user", "root")
-    sudo = _sudo(user)
-    token = p.get("token") or gen_token()
-    api_bind = p.get("api_bind") or p.get("admin_bind") or "0.0.0.0"
-    api_port = int(p.get("api_port") or p.get("admin_port") or 9901)
-    cfg = base_router_config(api_bind, api_port, token)
+def _install_agent(cl, sudo, bind, port, token, version):
+    """Upload + run install-agent.sh with --purge (clean install). Returns log."""
+    with open(os.path.join(SCRIPTS, "install-agent.sh"), encoding="utf-8") as f:
+        script = f.read()
+    ssh.put(cl, "/tmp/install-agent.sh", script)
+    args = f"--purge -a {bind}:{port} -t {token}"
+    if version:
+        args += f" -v {version}"
+    code, log = ssh.run(cl, f"{sudo}bash /tmp/install-agent.sh {args}; rm -f /tmp/install-agent.sh")
+    if code != 0:
+        raise RuntimeError(log.strip() or "agent install failed")
+    return log
 
+
+def _install_router(cl, sudo, api_bind, api_port, token, version):
+    """Clean-install sni-router: run their install.sh, wipe any old config, then
+    write a fresh API-only base config and start the service. Returns log."""
+    code, log = ssh.run(cl, f"curl -fsSL {SNI_INSTALL_URL} | {sudo}bash", timeout=600)
+    if code != 0:
+        raise RuntimeError("sni-router install.sh failed:\n" + log.strip())
+    # clean install: drop any pre-existing config before writing the fresh one
+    ssh.run(cl, f"{sudo}rm -f /etc/sni-router/sni-router.yaml /etc/sni-router/sni-router.yml")
+    cfg = base_router_config(api_bind, api_port, token)
+    # service runs as User=sni-router; hand it a readable (0640, owned) config
+    ssh.put_root(cl, sudo, "/etc/sni-router/sni-router.yaml", cfg, mode="0640")
+    ssh.run(cl, f"{sudo}chown sni-router:sni-router /etc/sni-router/sni-router.yaml")
+    code, log2 = ssh.run(cl, f"{sudo}systemctl enable --now sni-router")
+    log += "\n" + log2
+    if code != 0:
+        raise RuntimeError("starting sni-router failed:\n" + log2.strip())
+    return log
+
+
+def provision(p):
+    """Clean-install the selected targets on the remote host, then create or
+    overwrite the host row. `targets` is any of 'agent', 'router'.
+
+    On a fresh install a new token is generated and shared by both (agent reuses
+    the router token via agent_token). When updating an existing host, only the
+    fields for the installed targets are overwritten."""
+    targets = [t for t in (p.get("targets") or []) if t in ("agent", "router")]
+    if not targets:
+        raise RuntimeError("no install target selected (agent / router)")
+
+    s = p["ssh"]
+    sudo = _sudo(s.get("user", "root"))
+    version = (p.get("version") or "").strip()
+    token = gen_token()  # fresh token — clean install overwrites the old one
+    api_bind = p.get("api_bind") or "0.0.0.0"
+    api_port = int(p.get("api_port") or 9901)
+    agent_bind = p.get("agent_bind") or "0.0.0.0"
+    agent_port = int(p.get("agent_port") or rand_port())
+    agent_ip = (p.get("agent_ip") or "").strip()  # blank = reuse the router ip
+
+    log = ""
     cl = _connect(s)
     try:
-        code, log = ssh.run(cl, f"curl -fsSL {SNI_INSTALL_URL} | {sudo}bash", timeout=600)
-        if code != 0:
-            raise RuntimeError("sni-router install.sh failed:\n" + log.strip())
-        ssh.put_root(cl, sudo, "/etc/sni-router/sni-router.yaml", cfg, mode="0640")
-        # The service runs as User=sni-router; a root:root 0600 config is unreadable
-        # to it and the daemon exits with "Permission denied". Hand it to that user.
-        ssh.run(cl, f"{sudo}chown sni-router:sni-router /etc/sni-router/sni-router.yaml")
-        code, log2 = ssh.run(cl, f"{sudo}systemctl enable --now sni-router")
-        log += "\n" + log2
-        if code != 0:
-            raise RuntimeError("starting sni-router failed:\n" + log2.strip())
+        if "router" in targets:
+            log += _install_router(cl, sudo, api_bind, api_port, token, version)
+        if "agent" in targets:
+            log += ("\n" if log else "") + _install_agent(cl, sudo, agent_bind, agent_port, token, version)
     finally:
         cl.close()
 
+    ip = s["host"]  # the reachable router-api IP (and the agent's, when blank)
     host_id = p.get("host_id")
     if host_id:
-        db.update_host(host_id, port=api_port, token=token)
+        fields = {"name": p.get("name") or s["host"], "ip": ip}
+        if "router" in targets:
+            fields.update(port=api_port, token=token)
+        if "agent" in targets:
+            fields.update(agent_ip=agent_ip, agent_port=agent_port, agent_token=token)
+        db.update_host(host_id, **fields)
     else:
         host_id = db.add_host(
-            p.get("name") or s["host"], s["host"], api_port,
-            token=token, agent_port=p.get("agent_port", 9110),
+            p.get("name") or s["host"], ip, api_port,
+            token=token, agent_ip=agent_ip, agent_port=agent_port, agent_token="",
         )
-    return {"ok": True, "host_id": host_id, "api_port": api_port,
+    return {"ok": True, "host_id": host_id, "targets": targets,
+            "api_port": api_port if "router" in targets else None,
+            "agent_ip": agent_ip or ip,
+            "agent_port": agent_port if "agent" in targets else None,
             "token": token, "log": log}

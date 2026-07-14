@@ -7,16 +7,18 @@ const props = defineProps({ hosts: Array })
 const emit = defineEmits(['changed'])
 
 const checked = ref(new Set())
-const status = ref({}) // id -> 'online' | 'offline' | 'checking'
+const status = ref({})       // id -> 'online' | 'offline' | 'checking'  (router API)
+const agentStatus = ref({})  // id -> 'online' | 'offline' | 'checking'  (agent API)
 const showAdd = ref(false)
-const editId = ref(null) // null = adding a new host, else editing this id
-const form = ref({ name: '', ip: '', port: 9901, token: '', agent_port: 9110, agent_token: '' })
+const editId = ref(null)     // null = adding a new host, else editing this id
+const form = ref(blankForm())
 const addErr = ref('')
 const busy = ref(false)
 const discovering = ref(false)
 
 function blankForm() {
-  return { name: '', ip: '', port: 9901, token: '', agent_port: 9110, agent_token: '' }
+  return { name: '', ip: '', port: 9901, token: '',
+           agent_ip: '', agent_port: 9110, agent_token: '' }
 }
 function openAdd() {
   editId.value = null
@@ -28,13 +30,27 @@ function openEdit(h) {
   editId.value = h.id
   // tokens aren't returned by the API (only has_token) — leave blank = keep existing
   form.value = { name: h.name, ip: h.ip, port: h.port, token: '',
-                 agent_port: h.agent_port, agent_token: '' }
+                 agent_ip: h.agent_ip || '', agent_port: h.agent_port, agent_token: '' }
   addErr.value = ''
   showAdd.value = true
 }
 function closeModal() {
   showAdd.value = false
   editId.value = null
+}
+// blank agent IP means "same as the API IP" — fill it in when the field loses focus
+function fillAgentIp() {
+  if (!form.value.agent_ip) form.value.agent_ip = form.value.ip
+}
+
+const routerEndpoint = (h) => `${h.ip}:${h.port}`
+const agentEndpoint = (h) => `${h.agent_ip || h.ip}:${h.agent_port}`
+function dotClass(state) {
+  return {
+    'bg-emerald-500': state === 'online',
+    'bg-red-500': state === 'offline',
+    'bg-slate-500 animate-pulse': state === 'checking' || !state,
+  }
 }
 
 async function discoverLocal() {
@@ -53,7 +69,7 @@ async function discoverLocal() {
   }
 }
 
-// --- remote install (SSH provisioning) ---
+// --- remote install (SSH provisioning; always a clean install) ---
 const showInstall = ref(false)
 const instBusy = ref(false)
 const instErr = ref('')
@@ -62,46 +78,64 @@ const inst = ref(defaultInstall())
 
 function defaultInstall() {
   return {
-    target: 'agent', // 'agent' | 'router'
+    targets: { agent: true, router: false },
+    mode: 'new',      // 'new' | 'update'
+    host_id: null,    // set when mode === 'update'
     ssh: { host: '', port: 22, user: 'root', authMethod: 'password', password: '', key: '' },
     name: '',
-    agent_bind: '0.0.0.0', agent_port: '',
     api_bind: '0.0.0.0', api_port: 9901,
+    agent_bind: '0.0.0.0', agent_port: '', agent_ip: '',
     version: '',
   }
 }
-
 function openInstall() {
   inst.value = defaultInstall()
   instErr.value = ''
   instResult.value = null
   showInstall.value = true
 }
+function selectUpdateHost(id) {
+  const h = props.hosts.find((x) => x.id === id)
+  inst.value.host_id = id
+  if (!h) return
+  // prefill current values as a starting point — the operator overwrites them
+  inst.value.name = h.name
+  inst.value.ssh.host = h.ip
+  inst.value.api_port = h.port
+  inst.value.agent_ip = h.agent_ip || ''
+  inst.value.agent_port = h.agent_port || ''
+}
+// blank agent IP → the SSH/API host on blur (mirrors the Add-host behaviour)
+function fillInstAgentIp() {
+  if (!inst.value.agent_ip) inst.value.agent_ip = inst.value.ssh.host
+}
 
 async function runInstall() {
   instErr.value = ''
-  instResult.value = null
-  instBusy.value = true
   const i = inst.value
+  const targets = Object.keys(i.targets).filter((k) => i.targets[k])
+  if (!targets.length) { instErr.value = 'Select at least one thing to install.'; return }
+  if (i.mode === 'update' && !i.host_id) { instErr.value = 'Pick a host to update.'; return }
+
   const ssh = { host: i.ssh.host, port: Number(i.ssh.port) || 22, user: i.ssh.user }
   if (i.ssh.authMethod === 'key') ssh.key = i.ssh.key
   else ssh.password = i.ssh.password
+
+  const payload = { targets, ssh, name: i.name || i.ssh.host, version: i.version || null }
+  if (i.targets.router) { payload.api_bind = i.api_bind; payload.api_port = Number(i.api_port) || 9901 }
+  if (i.targets.agent) {
+    payload.agent_bind = i.agent_bind
+    payload.agent_port = i.agent_port ? Number(i.agent_port) : null
+    payload.agent_ip = i.agent_ip || null
+  }
+  if (i.mode === 'update' && i.host_id) payload.host_id = i.host_id
+
+  instResult.value = null
+  instBusy.value = true
   try {
-    if (i.target === 'agent') {
-      instResult.value = await api.provisionAgent({
-        ssh, name: i.name || i.ssh.host, agent_bind: i.agent_bind,
-        agent_port: i.agent_port ? Number(i.agent_port) : null,
-        version: i.version || null,
-      })
-    } else {
-      instResult.value = await api.provisionRouter({
-        ssh, name: i.name || i.ssh.host, api_bind: i.api_bind,
-        api_port: Number(i.api_port) || 9901,
-        version: i.version || null,
-      })
-    }
+    instResult.value = await api.provision(payload)
     emit('changed')
-    setTimeout(pingAll, 500)
+    setTimeout(pingAll, 800)
   } catch (e) {
     instErr.value = e.message
   } finally {
@@ -121,12 +155,9 @@ async function pingAll() {
   for (const h of props.hosts) {
     if (h?.id == null) continue // never ping a host without an id (avoids /hosts/undefined/status)
     status.value[h.id] = 'checking'
-    try {
-      await api.status(h.id)
-      status.value[h.id] = 'online'
-    } catch {
-      status.value[h.id] = 'offline'
-    }
+    agentStatus.value[h.id] = 'checking'
+    api.status(h.id).then(() => (status.value[h.id] = 'online'), () => (status.value[h.id] = 'offline'))
+    api.agentInfo(h.id).then(() => (agentStatus.value[h.id] = 'online'), () => (agentStatus.value[h.id] = 'offline'))
   }
 }
 
@@ -134,15 +165,16 @@ async function saveHost() {
   addErr.value = ''
   busy.value = true
   try {
+    const f = form.value
     if (editId.value != null) {
       // send tokens only when filled — blank means "keep the stored one"
-      const f = form.value
-      const payload = { name: f.name, ip: f.ip, port: f.port, agent_port: f.agent_port }
+      const payload = { name: f.name, ip: f.ip, port: f.port,
+                        agent_ip: f.agent_ip, agent_port: f.agent_port }
       if (f.token) payload.token = f.token
       if (f.agent_token) payload.agent_token = f.agent_token
       await api.updateHost(editId.value, payload)
     } else {
-      await api.addHost(form.value)
+      await api.addHost(f)
     }
     closeModal()
     emit('changed')
@@ -189,8 +221,8 @@ onMounted(pingAll)
           <tr>
             <th class="w-10 p-3"><input type="checkbox" @change="toggleAll" /></th>
             <th class="p-3">Name</th>
-            <th class="p-3">IP : Port</th>
-            <th class="p-3">API Status</th>
+            <th class="p-3">sni-router API</th>
+            <th class="p-3">Metrics agent</th>
             <th class="w-16 p-3"></th>
           </tr>
         </thead>
@@ -198,16 +230,18 @@ onMounted(pingAll)
           <tr v-for="h in hosts" :key="h.id" class="border-b border-slate-800/60 hover:bg-slate-800/30">
             <td class="p-3"><input type="checkbox" :checked="checked.has(h.id)" @change="toggle(h.id)" /></td>
             <td class="p-3 font-medium text-slate-200">{{ h.name }}</td>
-            <td class="p-3 text-slate-400">{{ h.ip }}:{{ h.port }}</td>
             <td class="p-3">
-              <span class="inline-flex items-center gap-2">
-                <span class="h-2.5 w-2.5 rounded-full"
-                  :class="{
-                    'bg-emerald-500': status[h.id] === 'online',
-                    'bg-red-500': status[h.id] === 'offline',
-                    'bg-slate-500 animate-pulse': status[h.id] === 'checking' || !status[h.id],
-                  }"></span>
-                <span class="text-slate-400">{{ status[h.id] || 'checking' }}</span>
+              <div class="font-mono text-xs text-slate-400">{{ routerEndpoint(h) }}</div>
+              <span class="mt-1 inline-flex items-center gap-2">
+                <span class="h-2.5 w-2.5 rounded-full" :class="dotClass(status[h.id])"></span>
+                <span class="text-xs text-slate-400">{{ status[h.id] || 'checking' }}</span>
+              </span>
+            </td>
+            <td class="p-3">
+              <div class="font-mono text-xs text-slate-400">{{ agentEndpoint(h) }}</div>
+              <span class="mt-1 inline-flex items-center gap-2">
+                <span class="h-2.5 w-2.5 rounded-full" :class="dotClass(agentStatus[h.id])"></span>
+                <span class="text-xs text-slate-400">{{ agentStatus[h.id] || 'checking' }}</span>
               </span>
             </td>
             <td class="p-3">
@@ -264,9 +298,16 @@ onMounted(pingAll)
           <label class="label">API Token (required for save/restart)</label>
           <PasswordInput v-model="form.token" class="mb-3"
             :placeholder="editId != null ? 'leave blank to keep current token' : 'Bearer token'" />
-          <div class="mb-3">
-            <label class="label">Agent port</label>
-            <input v-model.number="form.agent_port" type="number" class="input" />
+          <div class="mb-3 grid grid-cols-3 gap-3">
+            <div class="col-span-2">
+              <label class="label">Agent IP</label>
+              <input v-model="form.agent_ip" class="input" :placeholder="form.ip || 'same as API IP'"
+                     @blur="fillAgentIp" />
+            </div>
+            <div>
+              <label class="label">Agent Port</label>
+              <input v-model.number="form.agent_port" type="number" class="input" />
+            </div>
           </div>
           <label class="label">Agent token (blank = same as API token)</label>
           <PasswordInput v-model="form.agent_token" class="mb-3"
@@ -290,14 +331,14 @@ onMounted(pingAll)
         </div>
 
         <template v-if="!instResult">
-          <label class="label">What to install</label>
-          <div class="mb-4 flex gap-2">
-            <button type="button" class="flex-1 rounded-lg px-3 py-2 text-sm"
-              :class="inst.target === 'agent' ? 'bg-brand text-white' : 'bg-slate-800 text-slate-300'"
-              @click="inst.target = 'agent'">Metrics agent</button>
-            <button type="button" class="flex-1 rounded-lg px-3 py-2 text-sm"
-              :class="inst.target === 'router' ? 'bg-brand text-white' : 'bg-slate-800 text-slate-300'"
-              @click="inst.target = 'router'">sni-router</button>
+          <label class="label">What to install (clean install — wipes old config)</label>
+          <div class="mb-4 flex flex-wrap gap-4">
+            <label class="flex items-center gap-2 text-sm text-slate-300">
+              <input type="checkbox" v-model="inst.targets.agent" /> Metrics agent
+            </label>
+            <label class="flex items-center gap-2 text-sm text-slate-300">
+              <input type="checkbox" v-model="inst.targets.router" /> sni-router
+            </label>
           </div>
 
           <form @submit.prevent="runInstall">
@@ -328,23 +369,47 @@ onMounted(pingAll)
             <textarea v-else v-model="inst.ssh.key" class="input mb-3 h-24 font-mono text-xs"
                       placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
 
-            <label class="label">Host name (shown in UI)</label>
-            <input v-model="inst.name" class="input mb-3" :placeholder="inst.ssh.host || 'my-server'" />
-
-            <div v-if="inst.target === 'agent'" class="mb-3 grid grid-cols-2 gap-3">
-              <div><label class="label">Agent bind IP</label><input v-model="inst.agent_bind" class="input" /></div>
-              <div><label class="label">Agent port (blank = random)</label><input v-model="inst.agent_port" type="number" class="input" /></div>
+            <div v-if="inst.targets.router" class="mb-3 grid grid-cols-2 gap-3">
+              <div><label class="label">sni-router API bind IP</label><input v-model="inst.api_bind" class="input" /></div>
+              <div><label class="label">sni-router API port</label><input v-model.number="inst.api_port" type="number" class="input" /></div>
             </div>
-            <div v-else class="mb-3 grid grid-cols-2 gap-3">
-              <div><label class="label">API bind IP</label><input v-model="inst.api_bind" class="input" /></div>
-              <div><label class="label">API port</label><input v-model.number="inst.api_port" type="number" class="input" /></div>
+            <div v-if="inst.targets.agent" class="mb-3 grid grid-cols-3 gap-3">
+              <div><label class="label">Agent bind IP</label><input v-model="inst.agent_bind" class="input" /></div>
+              <div>
+                <label class="label">Agent IP (reach)</label>
+                <input v-model="inst.agent_ip" class="input" :placeholder="inst.ssh.host || 'same as API IP'" @blur="fillInstAgentIp" />
+              </div>
+              <div><label class="label">Agent port</label><input v-model="inst.agent_port" type="number" class="input" placeholder="random" /></div>
             </div>
 
             <label class="label">Version (blank = latest)</label>
-            <input v-model="inst.version" class="input mb-3" placeholder="latest" />
+            <input v-model="inst.version" class="input mb-4" placeholder="latest" />
+
+            <!-- new connection vs update existing -->
+            <div class="mb-3 flex overflow-hidden rounded-lg border border-slate-700">
+              <button type="button" class="flex-1 px-3 py-2 text-sm"
+                :class="inst.mode === 'new' ? 'bg-brand text-white' : 'bg-slate-900 text-slate-400 hover:bg-slate-800'"
+                @click="inst.mode = 'new'; inst.host_id = null">Create new connection</button>
+              <button type="button" class="flex-1 px-3 py-2 text-sm"
+                :class="inst.mode === 'update' ? 'bg-brand text-white' : 'bg-slate-900 text-slate-400 hover:bg-slate-800'"
+                @click="inst.mode = 'update'">Update existing</button>
+            </div>
+            <div v-if="inst.mode === 'new'" class="mb-3">
+              <label class="label">Host name (shown in UI)</label>
+              <input v-model="inst.name" class="input" :placeholder="inst.ssh.host || 'my-server'" />
+            </div>
+            <div v-else class="mb-3">
+              <label class="label">Host to overwrite</label>
+              <select class="input" :value="inst.host_id"
+                @change="selectUpdateHost(Number($event.target.value))">
+                <option :value="null" disabled>— pick a host —</option>
+                <option v-for="h in hosts" :key="h.id" :value="h.id">{{ h.name }} ({{ h.ip }})</option>
+              </select>
+              <p class="mt-1 text-xs text-slate-500">Reinstalls and overwrites its IP:PORT + tokens with the values above.</p>
+            </div>
 
             <p class="mb-3 text-xs text-slate-500">
-              SSH credentials are used once for this install and never stored. The token is generated automatically.
+              SSH credentials are used once for this install and never stored. A fresh token is generated automatically.
             </p>
             <p v-if="instErr" class="mb-3 whitespace-pre-wrap rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-400">{{ instErr }}</p>
             <div class="flex justify-end gap-2">
@@ -356,18 +421,19 @@ onMounted(pingAll)
 
         <template v-else>
           <div class="mb-3 rounded-lg bg-emerald-500/10 px-3 py-2 text-sm text-emerald-400">
-            Installed. Host saved / updated in the list.
+            Installed ({{ instResult.targets?.join(' + ') }}). Host saved / updated in the list.
           </div>
           <div class="mb-3 space-y-1 text-sm">
             <div v-if="instResult.token">
               <span class="text-slate-400">Token:</span>
               <span class="break-all font-mono text-slate-200">{{ instResult.token }}</span>
             </div>
-            <div v-if="instResult.agent_port">
-              <span class="text-slate-400">Agent port:</span> <span class="text-slate-200">{{ instResult.agent_port }}</span>
-            </div>
             <div v-if="instResult.api_port">
               <span class="text-slate-400">API port:</span> <span class="text-slate-200">{{ instResult.api_port }}</span>
+            </div>
+            <div v-if="instResult.agent_port">
+              <span class="text-slate-400">Agent:</span>
+              <span class="text-slate-200">{{ instResult.agent_ip }}:{{ instResult.agent_port }}</span>
             </div>
           </div>
           <label class="label">Install log</label>

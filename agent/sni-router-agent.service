@@ -8,10 +8,8 @@ EnvironmentFile=/etc/sni-router-agent/agent.conf
 ExecStart=/usr/bin/python3 /opt/sni-router-agent/agent.py
 Restart=on-failure
 RestartSec=3
-DynamicUser=yes
-NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=yes
+# Runs as root (no sandboxing): POST /update self-updates via the installer +
+# systemctl, which needs root. Guard it with a strong token.
 
 [Install]
 WantedBy=multi-user.target

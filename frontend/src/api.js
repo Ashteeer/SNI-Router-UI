@@ -35,9 +35,8 @@ export const api = {
   // discover a sni-router config on the UI host (Add Host convenience)
   discoverLocal: () => req('GET', '/config/discover'),
 
-  // remote provisioning over SSH
-  provisionAgent: (d) => req('POST', '/provision/agent', d),
-  provisionRouter: (d) => req('POST', '/provision/sni-router', d),
+  // remote provisioning over SSH (clean install of agent and/or sni-router)
+  provision: (d) => req('POST', '/provision', d),
 
   hosts: () => req('GET', '/hosts'),
   addHost: (d) => req('POST', '/hosts', d),

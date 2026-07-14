@@ -83,9 +83,14 @@ def parse_prom(text):
     return out
 
 
+def _agent_ip(host):
+    # the agent may sit at a different IP than the router api (blank = same ip)
+    return host.get("agent_ip") or host["ip"]
+
+
 async def fetch_agent(host):
     port = host.get("agent_port") or 9110
-    url = f"http://{host['ip']}:{port}/sys"
+    url = f"http://{_agent_ip(host)}:{port}/sys"
     async with httpx.AsyncClient(timeout=8) as cl:
         r = await cl.get(url, headers=_agent_headers(host))
         r.raise_for_status()
@@ -96,7 +101,7 @@ async def agent_update(host):
     """Tell the host's agent to self-update (agent runs as root, execs the CLI
     updater in a systemd transient scope). Returns the agent's JSON reply."""
     port = host.get("agent_port") or 9110
-    url = f"http://{host['ip']}:{port}/update"
+    url = f"http://{_agent_ip(host)}:{port}/update"
     async with httpx.AsyncClient(timeout=15) as cl:
         r = await cl.post(url, headers=_agent_headers(host))
         r.raise_for_status()

@@ -35,6 +35,7 @@ def init():
                 ip TEXT NOT NULL,
                 port INTEGER NOT NULL,
                 token TEXT DEFAULT '',
+                agent_ip TEXT DEFAULT '',
                 agent_port INTEGER DEFAULT 9110,
                 agent_token TEXT DEFAULT '',
                 created_at INTEGER NOT NULL
@@ -64,6 +65,9 @@ def init():
         # agent may use a different token than the router api (blank = same token)
         if "agent_token" not in cols:
             c.execute("ALTER TABLE hosts ADD COLUMN agent_token TEXT DEFAULT ''")
+        # agent may live at a different IP than the router api (blank = same ip)
+        if "agent_ip" not in cols:
+            c.execute("ALTER TABLE hosts ADD COLUMN agent_ip TEXT DEFAULT ''")
 
 
 # ---- settings ----
@@ -94,19 +98,19 @@ def get_host(host_id):
     return dict(row) if row else None
 
 
-def add_host(name, ip, port, token="", agent_port=9110, agent_token=""):
+def add_host(name, ip, port, token="", agent_port=9110, agent_token="", agent_ip=""):
     with _lock, _conn() as c:
         cur = c.execute(
-            "INSERT INTO hosts(name,ip,port,token,agent_port,agent_token,created_at) "
-            "VALUES(?,?,?,?,?,?,?)",
-            (name, ip, int(port), token, int(agent_port), agent_token, int(time.time())),
+            "INSERT INTO hosts(name,ip,port,token,agent_ip,agent_port,agent_token,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (name, ip, int(port), token, agent_ip, int(agent_port), agent_token, int(time.time())),
         )
         return cur.lastrowid
 
 
 def update_host(host_id, **fields):
     """Update the given columns of a host. Only known columns are applied."""
-    allowed = ("name", "ip", "port", "token", "agent_port", "agent_token")
+    allowed = ("name", "ip", "port", "token", "agent_ip", "agent_port", "agent_token")
     sets = {k: v for k, v in fields.items() if k in allowed and v is not None}
     if not sets:
         return

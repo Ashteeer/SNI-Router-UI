@@ -12,19 +12,23 @@ current.
 - **Dashboard** — per-host CPU / memory / network / connection charts (uPlot,
   drag-to-zoom, 1h–2d ranges) + stat tiles (uptime, active conns, disk, version).
   Bottom panel: software versions with **one-click self-update** (web UI + agent)
-  and the host's available IP addresses (mask-aware, shown as a range when the
-  mask covers more than one address).
-- **Hosts** — add/**edit**/remove sni-router instances (name, admin IP, port,
-  API token, agent port/token), bulk delete, live Online/Offline check. The
-  pencil edits a host in place; a blank token field keeps the stored one.
+  and the host's available IP addresses — **public IPv4 + IPv6 only** (the agent
+  drops loopback/private/link-local), mask-aware (a range when the mask covers >1).
+- **Hosts** — add/**edit**/remove sni-router instances, bulk delete. Each row
+  shows **sni-router API** `ip:port` + live status **and** the **metrics agent**
+  `agent_ip:agent_port` + live status. The agent may sit at a different IP than
+  the router (`agent_ip`, blank = same as API IP). Pencil edits in place; a blank
+  token/agent-token field keeps the stored one.
 - **Configs** — pick a host, edit its config in a **Visual** form or a **Manual**
   YAML editor (CodeMirror). The two stay in sync. Save (`PUT /config`) and
   Restart (`POST /restart`) go straight to that host's admin API. Visual covers
   `default_tls` (shared cert) and `log.level`; the header shows the host's IPs.
   Absent sections are stripped (never serialized as `key: null`) before save.
 - **Settings** — edit the site's **local** config (`ui.conf`) + IP whitelist.
-- **Remote install** (Hosts tab) — install the metrics agent or sni-router on a
-  remote host over SSH (paramiko), then save the host with its generated token.
+- **Remote install** (Hosts tab) — **clean-install** the metrics agent and/or
+  sni-router (checkboxes) on a remote host over SSH (paramiko), then create a new
+  host or **overwrite an existing one** (new/update tabs). Clean install wipes old
+  config; a fresh token is generated. (In-dashboard version updates preserve config.)
 
 ## Architecture
 
@@ -122,8 +126,8 @@ systemd units: `backend/sni-router-ui.service`, `agent/sni-router-agent.service`
 | `GET/PUT /settings` | IP whitelist |
 | `GET/PUT /config` | site's local config (`ui.conf`) |
 | `GET /version` · `POST /update/ui` | UI version/latest-check · self-update |
-| `POST /provision/agent` · `POST /provision/sni-router` | remote install over SSH |
-| `GET /hosts` · `POST /hosts` · `PUT /hosts/{id}` · `DELETE /hosts/{id}` · `POST /hosts/delete` | host CRUD (PUT = edit) |
+| `POST /provision` | clean-install agent/router over SSH (`targets`, opt. `host_id`) |
+| `GET /hosts` · `POST /hosts` · `PUT /hosts/{id}` · `DELETE /hosts/{id}` · `POST /hosts/delete` | host CRUD (PUT = edit; incl. `agent_ip`) |
 | `GET /hosts/{id}/status` · `/live` · `/history?range=1h\|6h\|24h\|48h` · `/agent` | metrics · agent `/sys` (IPs+version) |
 | `GET/PUT /hosts/{id}/config` · `POST /hosts/{id}/reload\|restart\|agent-update` | config control · agent self-update |
 
@@ -148,16 +152,18 @@ the fronting sni-router) else the socket peer. Admin password is scrypt-hashed.
 
 ## Remote provisioning (SSH)
 
-`provision.py` installs the agent or sni-router on a remote host over SSH
-(`ssh.py`, paramiko), run from the endpoints via `asyncio.to_thread`. SSH creds
-are per-request and **never stored**. Agent: the local `scripts/install-agent.sh`
-is uploaded and run (same version as the site), token generated server-side.
-sni-router: their `install.sh` is piped to bash, then a **base config** (an
-API-only config, no listeners/backends) exposing the unified `api` (`bind` +
-`token`) is written to `/etc/sni-router/sni-router.yaml` and the service is
-enabled. Both then create/update the host row (token + ports). No sni-router
-changes were needed — provisioning writes the config file directly, so even a
-read-only-admin build works.
+`provision.provision(p)` **clean-installs** the selected `targets` (`agent`
+and/or `router`) on a remote host over SSH (`ssh.py`, paramiko), from the single
+`POST /provision` endpoint via `asyncio.to_thread`. SSH creds are per-request and
+**never stored**. One fresh token is generated and shared by both. Agent: the
+local `scripts/install-agent.sh` is uploaded and run **with `--purge`** (wipes any
+old dir/config first). sni-router: their `install.sh` is piped to bash, the old
+config is removed, then a **base config** (API-only, `api.bind` + `token`) is
+written to `/etc/sni-router/sni-router.yaml` (0640, chowned) and the service
+enabled. Then create a new host row or **overwrite an existing one** (`host_id`):
+`ip`+`port`+`token` for the router, `agent_ip`+`agent_port`+`agent_token` for the
+agent. No sni-router changes were needed — provisioning writes the config directly,
+so even a read-only-admin build works.
 
 ## Status
 

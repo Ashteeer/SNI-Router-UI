@@ -21,6 +21,7 @@ the managed host and is written by the installer; the web UI never edits it.
 Self-check:  python3 agent.py selftest
 """
 import http.server
+import ipaddress
 import json
 import os
 import socketserver
@@ -28,7 +29,7 @@ import subprocess
 import sys
 import time
 
-AGENT_VERSION = "1.4.0"
+AGENT_VERSION = "1.5.0"
 CONF_PATH = os.environ.get("SNI_AGENT_CONF", "/etc/sni-router-agent/agent.conf")
 
 
@@ -111,24 +112,31 @@ _ips_cache = {"at": 0, "val": []}
 
 
 def ip_addrs():
-    """IPv4 addresses assigned on this host as CIDR strings (e.g. ["1.2.3.4/24"]).
-    ponytail: shells out to `ip` (present on any modern Linux) and caches 60s so
-    the 5s poller doesn't fork every tick; loopback dropped."""
+    """Public IPv4 + IPv6 addresses assigned on this host, as CIDR strings.
+    Only globally-routable addresses are returned — loopback, RFC1918 private,
+    link-local (169.254/fe80::), ULA (fc00::/7) etc. are dropped. ponytail: shells
+    out to `ip` (present on any modern Linux) and caches 60s so the 5s poller
+    doesn't fork every tick."""
     now = time.time()
     if now - _ips_cache["at"] < 60:
         return _ips_cache["val"]
     out = []
-    try:
-        text = subprocess.check_output(["ip", "-o", "-4", "addr", "show"], text=True)
+    for fam, key in (("-4", "inet"), ("-6", "inet6")):
+        try:
+            text = subprocess.check_output(["ip", "-o", fam, "addr", "show"], text=True)
+        except Exception:
+            continue
         for line in text.splitlines():
             f = line.split()
-            # "2: eth0    inet 1.2.3.4/24 brd ..." — take the token after `inet`
-            if "inet" in f and f[1] != "lo":
-                cidr = f[f.index("inet") + 1]
-                if not cidr.startswith("127."):
+            # "2: eth0    inet 1.2.3.4/24 brd ..." — token after inet/inet6
+            if key not in f or f[1] == "lo":
+                continue
+            cidr = f[f.index(key) + 1]
+            try:
+                if ipaddress.ip_address(cidr.split("/")[0]).is_global:
                     out.append(cidr)
-    except Exception:
-        pass
+            except ValueError:
+                continue
     _ips_cache.update(at=now, val=out)
     return out
 

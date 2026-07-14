@@ -322,8 +322,8 @@ def discover_local_router(user=Depends(require_auth)):
 # ---------- hosts ----------
 def _host_public(h):
     return {"id": h["id"], "name": h["name"], "ip": h["ip"], "port": h["port"],
-            "agent_port": h["agent_port"], "has_token": bool(h["token"]),
-            "has_agent_token": bool(h["agent_token"])}
+            "agent_ip": h["agent_ip"] or "", "agent_port": h["agent_port"],
+            "has_token": bool(h["token"]), "has_agent_token": bool(h["agent_token"])}
 
 
 @app.get("/api/hosts")
@@ -337,7 +337,8 @@ async def create_host(request: Request, user=Depends(require_auth)):
     if not d.get("name") or not d.get("ip") or not d.get("port"):
         raise HTTPException(status_code=400, detail="name, ip, port required")
     hid = db.add_host(d["name"], d["ip"], d["port"], d.get("token", ""),
-                      d.get("agent_port", 9110), d.get("agent_token", ""))
+                      d.get("agent_port", 9110), d.get("agent_token", ""),
+                      d.get("agent_ip", ""))
     return _host_public(db.get_host(hid))
 
 
@@ -346,7 +347,7 @@ async def edit_host(host_id: int, request: Request, user=Depends(require_auth)):
     require_host(host_id)
     d = await request.json()
     # only the keys actually sent are changed — a blank token field means "keep"
-    fields = {k: d[k] for k in ("name", "ip", "port", "token", "agent_port", "agent_token")
+    fields = {k: d[k] for k in ("name", "ip", "port", "token", "agent_ip", "agent_port", "agent_token")
               if k in d and d[k] is not None}
     db.update_host(host_id, **fields)
     return _host_public(db.get_host(host_id))
@@ -375,20 +376,11 @@ def _require_ssh(data):
     return data
 
 
-@app.post("/api/provision/agent")
-async def provision_agent_ep(request: Request, user=Depends(require_auth)):
+@app.post("/api/provision")
+async def provision_ep(request: Request, user=Depends(require_auth)):
     data = _require_ssh(await request.json())
     try:
-        return await asyncio.to_thread(provision.provision_agent, data)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
-
-
-@app.post("/api/provision/sni-router")
-async def provision_router_ep(request: Request, user=Depends(require_auth)):
-    data = _require_ssh(await request.json())
-    try:
-        return await asyncio.to_thread(provision.provision_sni_router, data)
+        return await asyncio.to_thread(provision.provision, data)
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
 
