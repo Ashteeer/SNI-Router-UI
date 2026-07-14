@@ -1,0 +1,11 @@
+# SNI-Router UI — site config (LOCAL to the machine running the UI).
+# Written by scripts/install-site.sh. Editable from the UI's Settings tab.
+# Plain KEY=VALUE so systemd can load it with EnvironmentFile=.
+# Changing host/port needs a service restart (uvicorn binds once at boot).
+
+# Interface / port the UI serves on. 0.0.0.0 = all interfaces.
+SNI_UI_HOST=127.0.0.1
+SNI_UI_PORT=8899
+
+# SQLite database path. Blank = sni-ui.db next to the backend.
+SNI_UI_DB=/opt/sni-router-ui/data/sni-ui.db

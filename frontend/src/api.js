@@ -28,6 +28,14 @@ export const api = {
   getSettings: () => req('GET', '/settings'),
   putSettings: (d) => req('PUT', '/settings', d),
 
+  // local site config (Settings tab)
+  getLocalConfig: () => req('GET', '/config'),
+  putLocalConfig: (values) => req('PUT', '/config', { values }),
+
+  // remote provisioning over SSH
+  provisionAgent: (d) => req('POST', '/provision/agent', d),
+  provisionRouter: (d) => req('POST', '/provision/sni-router', d),
+
   hosts: () => req('GET', '/hosts'),
   addHost: (d) => req('POST', '/hosts', d),
   deleteHost: (id) => req('DELETE', '/hosts/' + id),

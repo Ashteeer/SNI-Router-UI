@@ -5,11 +5,18 @@ Reads host stats from /proc + statvfs and serves them as JSON on GET /sys.
 The sni-router admin API does not expose host CPU/RAM/disk, so this tiny agent
 fills that gap. One per managed host.
 
-ponytail: stdlib only, single file. Auth is a bearer token from the env.
+ponytail: stdlib only, single file. Auth is a bearer token.
+
+Config resolution (later wins): built-in defaults < config file < environment.
+The config file is a plain KEY=VALUE file (same keys as the env vars) so systemd
+can load it verbatim with EnvironmentFile=. Path from SNI_AGENT_CONF, default
+/etc/sni-router-agent/agent.conf. This is the agent's LOCAL config — it lives on
+the managed host and is written by the installer; the web UI never edits it.
 
     SNI_AGENT_TOKEN   required; requests must send `Authorization: Bearer <token>`
     SNI_AGENT_PORT    default 9110
     SNI_AGENT_BIND    default 0.0.0.0 (use 127.0.0.1 when the UI is co-located)
+    SNI_AGENT_CONF    optional path to the KEY=VALUE config file
 
 Self-check:  python3 agent.py selftest
 """
@@ -20,9 +27,36 @@ import socketserver
 import sys
 import time
 
-TOKEN = os.environ.get("SNI_AGENT_TOKEN", "")
-PORT = int(os.environ.get("SNI_AGENT_PORT", "9110"))
-BIND = os.environ.get("SNI_AGENT_BIND", "0.0.0.0")
+CONF_PATH = os.environ.get("SNI_AGENT_CONF", "/etc/sni-router-agent/agent.conf")
+
+
+def load_conf(path):
+    """Parse a KEY=VALUE file into a dict. Missing file -> {}. Blank lines and
+    #-comments ignored; surrounding quotes on the value are stripped."""
+    out = {}
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line[0] == "#" or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                out[k.strip()] = v.strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return out
+
+
+_conf = load_conf(CONF_PATH)
+
+
+def _cfg(key, default):
+    return os.environ.get(key) or _conf.get(key) or default
+
+
+TOKEN = _cfg("SNI_AGENT_TOKEN", "")
+PORT = int(_cfg("SNI_AGENT_PORT", "9110"))
+BIND = _cfg("SNI_AGENT_BIND", "0.0.0.0")
 
 
 def _cpu_times():

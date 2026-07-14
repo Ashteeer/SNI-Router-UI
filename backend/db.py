@@ -96,6 +96,17 @@ def add_host(name, ip, port, token="", agent_port=9110, metrics_port=9100):
         return cur.lastrowid
 
 
+def update_host(host_id, **fields):
+    """Update the given columns of a host. Only known columns are applied."""
+    allowed = ("name", "ip", "port", "token", "agent_port", "metrics_port")
+    sets = {k: v for k, v in fields.items() if k in allowed and v is not None}
+    if not sets:
+        return
+    cols = ", ".join(f"{k}=?" for k in sets)
+    with _lock, _conn() as c:
+        c.execute(f"UPDATE hosts SET {cols} WHERE id=?", [*sets.values(), host_id])
+
+
 def delete_hosts(ids):
     if not ids:
         return

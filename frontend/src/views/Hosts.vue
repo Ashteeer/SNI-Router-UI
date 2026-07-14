@@ -12,6 +12,63 @@ const form = ref({ name: '', ip: '', port: 9901, token: '', metrics_port: 9100, 
 const addErr = ref('')
 const busy = ref(false)
 
+// --- remote install (SSH provisioning) ---
+const showInstall = ref(false)
+const instBusy = ref(false)
+const instErr = ref('')
+const instResult = ref(null)
+const inst = ref(defaultInstall())
+
+function defaultInstall() {
+  return {
+    target: 'agent', // 'agent' | 'router'
+    ssh: { host: '', port: 22, user: 'root', authMethod: 'password', password: '', key: '' },
+    name: '',
+    agent_bind: '0.0.0.0', agent_port: '',
+    admin_bind: '0.0.0.0', admin_port: 9901, metrics_port: 9100,
+    version: '',
+  }
+}
+
+function openInstall() {
+  inst.value = defaultInstall()
+  instErr.value = ''
+  instResult.value = null
+  showInstall.value = true
+}
+
+async function runInstall() {
+  instErr.value = ''
+  instResult.value = null
+  instBusy.value = true
+  const i = inst.value
+  const ssh = { host: i.ssh.host, port: Number(i.ssh.port) || 22, user: i.ssh.user }
+  if (i.ssh.authMethod === 'key') ssh.key = i.ssh.key
+  else ssh.password = i.ssh.password
+  try {
+    if (i.target === 'agent') {
+      instResult.value = await api.provisionAgent({
+        ssh, name: i.name || i.ssh.host, agent_bind: i.agent_bind,
+        agent_port: i.agent_port ? Number(i.agent_port) : null,
+        version: i.version || null,
+      })
+    } else {
+      instResult.value = await api.provisionRouter({
+        ssh, name: i.name || i.ssh.host, admin_bind: i.admin_bind,
+        admin_port: Number(i.admin_port) || 9901,
+        metrics_port: Number(i.metrics_port) || 9100,
+        version: i.version || null,
+      })
+    }
+    emit('changed')
+    setTimeout(pingAll, 500)
+  } catch (e) {
+    instErr.value = e.message
+  } finally {
+    instBusy.value = false
+  }
+}
+
 function toggle(id) {
   checked.value.has(id) ? checked.value.delete(id) : checked.value.add(id)
   checked.value = new Set(checked.value)
@@ -72,6 +129,7 @@ onMounted(pingAll)
         <button class="btn-danger" :disabled="!checked.size" @click="removeChecked">
           Delete selected ({{ checked.size }})
         </button>
+        <button class="btn-ghost" @click="openInstall">⇩ Remote install</button>
         <button class="btn-primary" @click="showAdd = true">+ Add Host</button>
       </div>
     </div>
@@ -161,6 +219,106 @@ onMounted(pingAll)
             <button class="btn-primary" :disabled="busy">Add</button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <!-- Remote install modal -->
+    <div v-if="showInstall" class="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4"
+         @click.self="showInstall = false">
+      <div class="card max-h-[90vh] w-full max-w-lg overflow-y-auto">
+        <div class="mb-4 flex items-center justify-between">
+          <h2 class="text-lg font-semibold text-slate-100">Remote install (SSH)</h2>
+          <button class="text-slate-400 hover:text-slate-200" @click="showInstall = false">✕</button>
+        </div>
+
+        <template v-if="!instResult">
+          <label class="label">What to install</label>
+          <div class="mb-4 flex gap-2">
+            <button type="button" class="flex-1 rounded-lg px-3 py-2 text-sm"
+              :class="inst.target === 'agent' ? 'bg-brand text-white' : 'bg-slate-800 text-slate-300'"
+              @click="inst.target = 'agent'">Metrics agent</button>
+            <button type="button" class="flex-1 rounded-lg px-3 py-2 text-sm"
+              :class="inst.target === 'router' ? 'bg-brand text-white' : 'bg-slate-800 text-slate-300'"
+              @click="inst.target = 'router'">sni-router</button>
+          </div>
+
+          <form @submit.prevent="runInstall">
+            <div class="mb-3 grid grid-cols-3 gap-3">
+              <div class="col-span-2">
+                <label class="label">SSH host / IP</label>
+                <input v-model="inst.ssh.host" class="input" placeholder="203.0.113.5" required />
+              </div>
+              <div>
+                <label class="label">SSH port</label>
+                <input v-model.number="inst.ssh.port" type="number" class="input" />
+              </div>
+            </div>
+            <label class="label">SSH user</label>
+            <input v-model="inst.ssh.user" class="input mb-3" placeholder="root" />
+
+            <label class="label">Authentication</label>
+            <div class="mb-2 flex gap-2">
+              <button type="button" class="flex-1 rounded-lg px-3 py-2 text-sm"
+                :class="inst.ssh.authMethod === 'password' ? 'bg-brand text-white' : 'bg-slate-800 text-slate-300'"
+                @click="inst.ssh.authMethod = 'password'">Password</button>
+              <button type="button" class="flex-1 rounded-lg px-3 py-2 text-sm"
+                :class="inst.ssh.authMethod === 'key' ? 'bg-brand text-white' : 'bg-slate-800 text-slate-300'"
+                @click="inst.ssh.authMethod = 'key'">Private key</button>
+            </div>
+            <input v-if="inst.ssh.authMethod === 'password'" v-model="inst.ssh.password" type="password"
+                   class="input mb-3" placeholder="SSH password" autocomplete="off" />
+            <textarea v-else v-model="inst.ssh.key" class="input mb-3 h-24 font-mono text-xs"
+                      placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+
+            <label class="label">Host name (shown in UI)</label>
+            <input v-model="inst.name" class="input mb-3" :placeholder="inst.ssh.host || 'my-server'" />
+
+            <div v-if="inst.target === 'agent'" class="mb-3 grid grid-cols-2 gap-3">
+              <div><label class="label">Agent bind IP</label><input v-model="inst.agent_bind" class="input" /></div>
+              <div><label class="label">Agent port (blank = random)</label><input v-model="inst.agent_port" type="number" class="input" /></div>
+            </div>
+            <div v-else class="mb-3 grid grid-cols-3 gap-3">
+              <div><label class="label">Admin bind IP</label><input v-model="inst.admin_bind" class="input" /></div>
+              <div><label class="label">Admin port</label><input v-model.number="inst.admin_port" type="number" class="input" /></div>
+              <div><label class="label">Metrics port</label><input v-model.number="inst.metrics_port" type="number" class="input" /></div>
+            </div>
+
+            <label class="label">Version (blank = latest)</label>
+            <input v-model="inst.version" class="input mb-3" placeholder="latest" />
+
+            <p class="mb-3 text-xs text-slate-500">
+              SSH credentials are used once for this install and never stored. The token is generated automatically.
+            </p>
+            <p v-if="instErr" class="mb-3 whitespace-pre-wrap rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-400">{{ instErr }}</p>
+            <div class="flex justify-end gap-2">
+              <button type="button" class="btn-ghost" @click="showInstall = false">Close</button>
+              <button class="btn-primary" :disabled="instBusy">{{ instBusy ? 'Installing…' : 'Install' }}</button>
+            </div>
+          </form>
+        </template>
+
+        <template v-else>
+          <div class="mb-3 rounded-lg bg-emerald-500/10 px-3 py-2 text-sm text-emerald-400">
+            Installed. Host saved / updated in the list.
+          </div>
+          <div class="mb-3 space-y-1 text-sm">
+            <div v-if="instResult.token">
+              <span class="text-slate-400">Token:</span>
+              <span class="break-all font-mono text-slate-200">{{ instResult.token }}</span>
+            </div>
+            <div v-if="instResult.agent_port">
+              <span class="text-slate-400">Agent port:</span> <span class="text-slate-200">{{ instResult.agent_port }}</span>
+            </div>
+            <div v-if="instResult.admin_port">
+              <span class="text-slate-400">Admin port:</span> <span class="text-slate-200">{{ instResult.admin_port }}</span>
+            </div>
+          </div>
+          <label class="label">Install log</label>
+          <pre class="mb-3 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-950 p-3 text-xs text-slate-300">{{ instResult.log }}</pre>
+          <div class="flex justify-end">
+            <button class="btn-primary" @click="showInstall = false">Done</button>
+          </div>
+        </template>
       </div>
     </div>
   </div>

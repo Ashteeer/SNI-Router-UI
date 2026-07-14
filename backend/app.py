@@ -19,8 +19,10 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
+import uiconf  # noqa: F401 — import first: folds ui.conf into the env before db reads it
 import collector
 import db
+import provision
 
 SESSION_TTL = 7 * 86400  # 7 days
 DIST = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
@@ -199,6 +201,23 @@ async def put_settings(request: Request, user=Depends(require_auth)):
     return {"ok": True}
 
 
+# ---------- local site config (the only config the UI edits itself) ----------
+@app.get("/api/config")
+def get_config_local(user=Depends(require_auth)):
+    return {"fields": uiconf.FIELDS, "values": uiconf.read(), "path": uiconf.CONF_PATH}
+
+
+@app.put("/api/config")
+async def put_config_local(request: Request, user=Depends(require_auth)):
+    data = await request.json()
+    updates = {k: v for k, v in (data.get("values") or {}).items() if k in uiconf.EDITABLE}
+    try:
+        values = uiconf.write(updates)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"cannot write {uiconf.CONF_PATH}: {e}")
+    return {"ok": True, "values": values, "restart_required": True}
+
+
 # ---------- hosts ----------
 def _host_public(h):
     return {"id": h["id"], "name": h["name"], "ip": h["ip"], "port": h["port"],
@@ -232,6 +251,34 @@ async def bulk_delete(request: Request, user=Depends(require_auth)):
 def delete_host(host_id: int, user=Depends(require_auth)):
     db.delete_hosts([host_id])
     return {"ok": True}
+
+
+# ---------- remote provisioning over SSH ----------
+def _require_ssh(data):
+    ssh = data.get("ssh") or {}
+    if not ssh.get("host"):
+        raise HTTPException(status_code=400, detail="ssh.host required")
+    if not ssh.get("password") and not ssh.get("key"):
+        raise HTTPException(status_code=400, detail="ssh password or key required")
+    return data
+
+
+@app.post("/api/provision/agent")
+async def provision_agent_ep(request: Request, user=Depends(require_auth)):
+    data = _require_ssh(await request.json())
+    try:
+        return await asyncio.to_thread(provision.provision_agent, data)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.post("/api/provision/sni-router")
+async def provision_router_ep(request: Request, user=Depends(require_auth)):
+    data = _require_ssh(await request.json())
+    try:
+        return await asyncio.to_thread(provision.provision_sni_router, data)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 # ---------- per-host admin proxy ----------

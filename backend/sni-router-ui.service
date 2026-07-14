@@ -4,9 +4,8 @@ After=network.target
 
 [Service]
 WorkingDirectory=/opt/sni-router-ui/backend
-Environment=SNI_UI_DB=/opt/sni-router-ui/data/sni-ui.db
-Environment=SNI_UI_HOST=127.0.0.1
-Environment=SNI_UI_PORT=8899
+# Host / port / DB path come from the local config file (editable in the UI).
+EnvironmentFile=/etc/sni-router-ui/ui.conf
 ExecStart=/opt/sni-router-ui/backend/.venv/bin/uvicorn app:app --host ${SNI_UI_HOST} --port ${SNI_UI_PORT}
 Restart=on-failure
 RestartSec=3

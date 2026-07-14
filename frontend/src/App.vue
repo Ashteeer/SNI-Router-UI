@@ -5,6 +5,7 @@ import Login from './views/Login.vue'
 import Dashboard from './views/Dashboard.vue'
 import Hosts from './views/Hosts.vue'
 import Configs from './views/Configs.vue'
+import Settings from './views/Settings.vue'
 
 const authState = ref('loading') // loading | setup | login | ready
 const tab = ref('dashboard')
@@ -36,6 +37,7 @@ const tabs = [
   { id: 'dashboard', label: 'Dashboard' },
   { id: 'hosts', label: 'Hosts' },
   { id: 'configs', label: 'Configs' },
+  { id: 'settings', label: 'Settings' },
 ]
 </script>
 
@@ -80,10 +82,11 @@ const tabs = [
       />
       <Hosts v-else-if="tab === 'hosts'" :hosts="hosts" @changed="loadHosts" />
       <Configs
-        v-else
+        v-else-if="tab === 'configs'"
         :hosts="hosts"
         v-model:hostId="currentHostId"
       />
+      <Settings v-else />
     </main>
   </div>
 </template>
