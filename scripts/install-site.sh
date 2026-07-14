@@ -112,7 +112,10 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
   systemctl daemon-reload
-  systemctl enable --now sni-router-ui.service
+  systemctl enable sni-router-ui.service
+  # restart (not just enable --now): on an upgrade the unit is already running, and
+  # `--now` would NOT reload the new backend code. restart always picks it up.
+  systemctl restart sni-router-ui.service
   sleep 1
   systemctl is-active --quiet sni-router-ui.service || die "service failed to start (journalctl -u sni-router-ui)"
 else

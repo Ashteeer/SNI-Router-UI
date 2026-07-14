@@ -100,7 +100,10 @@ ProtectHome=yes
 WantedBy=multi-user.target
 EOF
   systemctl daemon-reload
-  systemctl enable --now sni-router-agent.service
+  systemctl enable sni-router-agent.service
+  # restart (not just enable --now): on a reinstall the unit is already running, and
+  # `--now` would NOT apply the new config/code. restart always picks it up.
+  systemctl restart sni-router-agent.service
   sleep 1
   systemctl is-active --quiet sni-router-agent.service || die "service failed to start (journalctl -u sni-router-agent)"
 else
