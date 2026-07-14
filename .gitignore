@@ -1,0 +1,40 @@
+# --- Secrets / instances (NEVER commit) ---
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.*
+*.key
+*.pem
+*.crt
+*_token*
+secrets*
+ssh_config
+id_*
+*.local.yaml
+sni-router.yaml
+config.instance.*
+
+# --- Prompt / instruction files (keep private) ---
+RTK.md
+prompt*.md
+.claude/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# --- Node / frontend build ---
+node_modules/
+frontend/dist/
+frontend/.vite/
+npm-debug.log*
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

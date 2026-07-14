@@ -1,0 +1,20 @@
+[Unit]
+Description=SNI-Router UI metrics agent
+After=network.target
+
+[Service]
+# Set the token to the same value used as the host's API token in the UI.
+Environment=SNI_AGENT_TOKEN=CHANGE_ME
+Environment=SNI_AGENT_PORT=9110
+# Use 127.0.0.1 when the UI backend runs on this same host.
+Environment=SNI_AGENT_BIND=0.0.0.0
+ExecStart=/usr/bin/python3 /opt/sni-router-ui/agent/agent.py
+Restart=on-failure
+RestartSec=3
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target
