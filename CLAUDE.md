@@ -11,8 +11,9 @@ current.
 
 - **Dashboard** — per-host CPU / memory / network / connection charts (uPlot,
   drag-to-zoom, 1h–2d ranges) + stat tiles (uptime, active conns, disk, version).
-  Bottom panel: software versions with **one-click self-update** (web UI + agent)
-  and the host's available IP addresses — **public IPv4 + IPv6 only** (the agent
+  Bottom panel: software versions with **one-click self-update** (web UI + agent +
+  **sni-router**, each vs its GitHub latest release) and the host's available IP
+  addresses — **public IPv4 + IPv6 only** (the agent
   drops loopback/private/link-local), mask-aware (a range when the mask covers >1).
 - **Hosts** — add/**edit**/remove sni-router instances, bulk delete. Each row
   shows **sni-router API** `ip:port` + live status **and** the **metrics agent**
@@ -52,6 +53,11 @@ which is why the **agent now runs as root** (no `DynamicUser`) — it needs to
 write `/opt` and call `systemctl`. Both installers are update-safe: re-running
 them preserves the existing token/bind/port/DB. CLI: `sni-router-ui` /
 `sni-router-agent` each take `-u|--update`, `-v|--version`, `-h|--help`.
+**sni-router self-update** goes through the router's own admin API: the version
+comes from `GET /status`, the latest tag from `Ashteeer/sni-router` releases, and
+`POST /hosts/{id}/update` proxies the router's `POST /update` (downloads + re-execs
+into the new binary — config.md §8.1). So the UI can view + update all three:
+web UI, agent (per host), and sni-router (per host).
 
 Why an agent: the sni-router admin API exposes router stats only (connections,
 bytes, uptime). Host **CPU/RAM/disk/network** come from `agent/agent.py`, a
@@ -129,7 +135,7 @@ systemd units: `backend/sni-router-ui.service`, `agent/sni-router-agent.service`
 | `POST /provision` | clean-install agent/router over SSH (`targets`, opt. `host_id`) |
 | `GET /hosts` · `POST /hosts` · `PUT /hosts/{id}` · `DELETE /hosts/{id}` · `POST /hosts/delete` | host CRUD (PUT = edit; incl. `agent_ip`) |
 | `GET /hosts/{id}/status` · `/live` · `/history?range=1h\|6h\|24h\|48h` · `/agent` | metrics · agent `/sys` (IPs+version) |
-| `GET/PUT /hosts/{id}/config` · `POST /hosts/{id}/reload\|restart\|agent-update` | config control · agent self-update |
+| `GET/PUT /hosts/{id}/config` · `POST /hosts/{id}/reload\|restart\|update\|agent-update` | config control · router self-update (proxies router `POST /update`) · agent self-update |
 
 ## Config sync logic (Configs tab)
 

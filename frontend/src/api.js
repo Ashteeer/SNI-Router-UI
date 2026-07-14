@@ -49,6 +49,7 @@ export const api = {
   updateUi: () => req('POST', '/update/ui'),
   agentInfo: (id) => req('GET', `/hosts/${id}/agent`),
   updateAgent: (id) => req('POST', `/hosts/${id}/agent-update`),
+  updateRouter: (id) => req('POST', `/hosts/${id}/update`),
 
   status: (id) => req('GET', `/hosts/${id}/status`),
   live: (id) => req('GET', `/hosts/${id}/live`),

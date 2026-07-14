@@ -64,6 +64,10 @@ async function loadVersion() {
 const agentUpdate = computed(() =>
   !!(sys.value?.latest && agent.value?.version && verNewer(sys.value.latest, agent.value.version)))
 
+const routerVersion = computed(() => live.value?.status?.version || null)
+const routerUpdate = computed(() =>
+  !!(sys.value?.router_latest && routerVersion.value && verNewer(sys.value.router_latest, routerVersion.value)))
+
 async function doUpdateUi() {
   if (!confirm('Update the web UI to ' + sys.value.latest + '? It will restart itself.')) return
   updating.value = 'ui'
@@ -79,6 +83,16 @@ async function doUpdateAgent() {
     await api.updateAgent(props.hostId)
     updateMsg.value = 'Agent is updating — it will restart. Version refreshes shortly.'
     setTimeout(() => { loadAgent(); updating.value = '' }, 15000)
+  } catch (e) { updateMsg.value = 'Update failed: ' + e.message; updating.value = '' }
+}
+async function doUpdateRouter() {
+  if (!confirm('Update sni-router on this host to ' + sys.value.router_latest +
+               '? It re-execs into the new binary — active connections drop.')) return
+  updating.value = 'router'
+  try {
+    await api.updateRouter(props.hostId)
+    updateMsg.value = 'sni-router update requested — it re-execs to apply. Version refreshes shortly.'
+    setTimeout(() => { loadLive(); updating.value = '' }, 15000)
   } catch (e) { updateMsg.value = 'Update failed: ' + e.message; updating.value = '' }
 }
 
@@ -184,7 +198,7 @@ onBeforeUnmount(() => { clearInterval(liveTimer); clearInterval(histTimer) })
               @click="doUpdateUi">{{ updating === 'ui' ? 'Updating…' : 'Update' }}</button>
             <span v-else-if="sys" class="text-xs text-emerald-400">up to date</span>
           </div>
-          <div class="flex items-center justify-between gap-3 py-2">
+          <div class="flex items-center justify-between gap-3 border-b border-slate-800 py-2">
             <div>
               <div class="text-sm text-slate-300">Agent (this host)</div>
               <div class="text-xs text-slate-500">
@@ -194,6 +208,18 @@ onBeforeUnmount(() => { clearInterval(liveTimer); clearInterval(histTimer) })
             <button v-if="agentUpdate" class="btn-primary" :disabled="updating"
               @click="doUpdateAgent">{{ updating === 'agent' ? 'Updating…' : 'Update' }}</button>
             <span v-else-if="agent?.version" class="text-xs text-emerald-400">up to date</span>
+          </div>
+          <div class="flex items-center justify-between gap-3 py-2">
+            <div>
+              <div class="text-sm text-slate-300">sni-router (this host)</div>
+              <div class="text-xs text-slate-500">
+                {{ routerVersion ? 'installed ' + routerVersion : 'router offline / no version' }}
+                <span v-if="sys?.router_latest"> · latest {{ sys.router_latest }}</span>
+              </div>
+            </div>
+            <button v-if="routerUpdate" class="btn-primary" :disabled="updating"
+              @click="doUpdateRouter">{{ updating === 'router' ? 'Updating…' : 'Update' }}</button>
+            <span v-else-if="routerVersion" class="text-xs text-emerald-400">up to date</span>
           </div>
           <p v-if="updateMsg" class="mt-2 rounded-lg bg-brand/10 px-3 py-2 text-sm text-brand">{{ updateMsg }}</p>
         </div>

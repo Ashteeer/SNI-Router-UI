@@ -30,6 +30,7 @@ SESSION_TTL = 7 * 86400  # 7 days
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 DIST = os.path.join(ROOT, "frontend", "dist")
 REPO = "Ashteeer/SNI-Router-UI"
+SNI_ROUTER_REPO = "Ashteeer/sni-router"
 
 
 # ---------- auth primitives (stdlib only) ----------
@@ -152,21 +153,22 @@ def version_newer(latest, current):
     return bool(lt) and lt > ct
 
 
-_latest = {"tag": None, "at": 0.0}
+_latest = {}  # repo -> {"tag": str, "at": float}; cached ~1h per repo
 
 
-async def latest_release():
-    if _latest["tag"] and time.time() - _latest["at"] < 3600:
-        return _latest["tag"]
+async def latest_release(repo=REPO):
+    ent = _latest.get(repo)
+    if ent and time.time() - ent["at"] < 3600:
+        return ent["tag"]
     try:
         async with httpx.AsyncClient(timeout=8) as cl:
-            r = await cl.get(f"https://api.github.com/repos/{REPO}/releases/latest")
+            r = await cl.get(f"https://api.github.com/repos/{repo}/releases/latest")
             tag = r.json().get("tag_name")
     except Exception:
         tag = None
     if tag:
-        _latest.update(tag=tag, at=time.time())
-    return _latest["tag"]
+        _latest[repo] = {"tag": tag, "at": time.time()}
+    return (_latest.get(repo) or {}).get("tag")
 
 
 def _spawn_update(unit, cmd):
@@ -273,8 +275,9 @@ async def put_config_local(request: Request, user=Depends(require_auth)):
 @app.get("/api/version")
 async def version(user=Depends(require_auth)):
     cur = ui_version()
-    latest = await latest_release()
-    return {"ui": cur, "latest": latest, "update_available": version_newer(latest, cur)}
+    latest = await latest_release(REPO)
+    return {"ui": cur, "latest": latest, "update_available": version_newer(latest, cur),
+            "router_latest": await latest_release(SNI_ROUTER_REPO)}
 
 
 @app.post("/api/update/ui")
@@ -454,7 +457,9 @@ async def host_agent_update(host_id: int, user=Depends(require_auth)):
 
 @app.post("/api/hosts/{host_id}/{action}")
 async def control(host_id: int, action: str, user=Depends(require_auth)):
-    if action not in ("reload", "restart"):
+    # `update` maps to the router's own POST /update (self-update via its GitHub
+    # releases; it re-execs into the new binary — config.md §8.1).
+    if action not in ("reload", "restart", "update"):
         raise HTTPException(status_code=404, detail="unknown action")
     host = require_host(host_id)
     try:
