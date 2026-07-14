@@ -22,8 +22,10 @@ _PROM_KEYS = {
 }
 
 
-def admin_base(host):
-    return f"http://{host['ip']}:{host['port']}"
+# The router api is http when default_tls is unset, https otherwise (config.md §8).
+# Autodetect per host and cache the winning scheme. ponytail: in-memory; re-probed
+# after a restart, and falls back to the other scheme if a host flips.
+_scheme = {}  # host_id -> "https" | "http"
 
 
 def _auth_headers(host):
@@ -36,14 +38,31 @@ def _agent_headers(host):
     return {"Authorization": f"Bearer {tok}"} if tok else {}
 
 
+def _scheme_order(host):
+    order = ["https", "http"]
+    cached = _scheme.get(host.get("id"))
+    return [cached] + [s for s in order if s != cached] if cached else order
+
+
 async def admin_request(host, method, path, content=None, timeout=10):
-    async with httpx.AsyncClient(timeout=timeout) as cl:
-        return await cl.request(
-            method,
-            f"{admin_base(host)}{path}",
-            content=content,
-            headers=_auth_headers(host),
-        )
+    hid = host.get("id")
+    last = None
+    # verify=False: the api often uses default_tls (self-signed / internal cert).
+    async with httpx.AsyncClient(timeout=timeout, verify=False) as cl:
+        for scheme in _scheme_order(host):
+            try:
+                r = await cl.request(
+                    method,
+                    f"{scheme}://{host['ip']}:{host['port']}{path}",
+                    content=content,
+                    headers=_auth_headers(host),
+                )
+                if hid is not None:
+                    _scheme[hid] = scheme  # a real HTTP reply means the scheme is right
+                return r
+            except httpx.TransportError as e:
+                last = e  # wrong scheme (TLS vs plaintext) or unreachable — try the other
+    raise last
 
 
 def parse_prom(text):
@@ -77,8 +96,7 @@ async def poll_host(host):
     values = {"up": 0}
     # /metrics is served on the unified api bind (same port + token as admin).
     try:
-        async with httpx.AsyncClient(timeout=8) as cl:
-            r = await cl.get(f"{admin_base(host)}/metrics", headers=_auth_headers(host))
+        r = await admin_request(host, "GET", "/metrics", timeout=8)
         if r.status_code == 200:
             values.update(parse_prom(r.text))
             values["up"] = 1
@@ -129,3 +147,14 @@ def build_history(rows):
             prev = (cur, ts)
         out[name] = rates
     return out
+
+
+if __name__ == "__main__":  # ponytail: self-check for the scheme-detection order
+    _scheme.clear()
+    assert _scheme_order({"id": 1}) == ["https", "http"]  # unknown: https first
+    _scheme[1] = "http"
+    assert _scheme_order({"id": 1}) == ["http", "https"]  # cached wins, other as fallback
+    _scheme[1] = "https"
+    assert _scheme_order({"id": 1}) == ["https", "http"]
+    assert _scheme_order({}) == ["https", "http"]  # no id: no cache
+    print("collector self-check OK")
