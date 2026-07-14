@@ -114,9 +114,21 @@ the fronting sni-router) else the socket peer. Admin password is scrypt-hashed.
 ## Status
 
 - [x] Backend, agent, full frontend (all three tabs) implemented.
-- [ ] End-to-end tested against a live sni-router.
+- [x] End-to-end tested on Ubuntu 24.04: dashboard/metrics/hosts/config-read
+  against a live sni-router; config save/validation-errors/restart against a
+  router that implements the documented write API.
 - Visual configurator covers listeners, backends (mode-aware), timeouts, limits,
   log, metrics, admin. Anything it doesn't surface is always editable in Manual.
+- Published: https://github.com/Ashteeer/SNI-Router-UI
+
+### Compatibility note
+
+Some sni-router builds ship a **read-only** admin API — `PUT /config`,
+`POST /reload`, and `POST /restart` return `405 Method Not Allowed`. Read
+features (status, config view, metrics) work regardless; the UI surfaces the 405
+as an error on Save/Restart. `/metrics` is served on its own port
+(`metrics.bind`, default 9100), separate from `admin.bind` (default 9901) — the
+UI stores both per host (`metrics_port`, plus `agent_port` for the agent).
 
 ## Conventions / notes
 
