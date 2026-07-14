@@ -257,7 +257,8 @@ def discover_local_router(user=Depends(require_auth)):
 # ---------- hosts ----------
 def _host_public(h):
     return {"id": h["id"], "name": h["name"], "ip": h["ip"], "port": h["port"],
-            "agent_port": h["agent_port"], "has_token": bool(h["token"])}
+            "agent_port": h["agent_port"], "has_token": bool(h["token"]),
+            "has_agent_token": bool(h["agent_token"])}
 
 
 @app.get("/api/hosts")
@@ -271,7 +272,7 @@ async def create_host(request: Request, user=Depends(require_auth)):
     if not d.get("name") or not d.get("ip") or not d.get("port"):
         raise HTTPException(status_code=400, detail="name, ip, port required")
     hid = db.add_host(d["name"], d["ip"], d["port"], d.get("token", ""),
-                      d.get("agent_port", 9110))
+                      d.get("agent_port", 9110), d.get("agent_token", ""))
     return _host_public(db.get_host(hid))
 
 

@@ -30,6 +30,12 @@ def _auth_headers(host):
     return {"Authorization": f"Bearer {host['token']}"} if host.get("token") else {}
 
 
+def _agent_headers(host):
+    # the agent may run with its own token; blank = reuse the router api token
+    tok = host.get("agent_token") or host.get("token")
+    return {"Authorization": f"Bearer {tok}"} if tok else {}
+
+
 async def admin_request(host, method, path, content=None, timeout=10):
     async with httpx.AsyncClient(timeout=timeout) as cl:
         return await cl.request(
@@ -62,7 +68,7 @@ async def fetch_agent(host):
     port = host.get("agent_port") or 9110
     url = f"http://{host['ip']}:{port}/sys"
     async with httpx.AsyncClient(timeout=8) as cl:
-        r = await cl.get(url, headers=_auth_headers(host))
+        r = await cl.get(url, headers=_agent_headers(host))
         r.raise_for_status()
         return r.json()
 

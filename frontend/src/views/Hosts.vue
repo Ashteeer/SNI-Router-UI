@@ -9,7 +9,7 @@ const emit = defineEmits(['changed'])
 const checked = ref(new Set())
 const status = ref({}) // id -> 'online' | 'offline' | 'checking'
 const showAdd = ref(false)
-const form = ref({ name: '', ip: '', port: 9901, token: '', agent_port: 9110 })
+const form = ref({ name: '', ip: '', port: 9901, token: '', agent_port: 9110, agent_token: '' })
 const addErr = ref('')
 const busy = ref(false)
 const discovering = ref(false)
@@ -113,7 +113,7 @@ async function addHost() {
   try {
     await api.addHost(form.value)
     showAdd.value = false
-    form.value = { name: '', ip: '', port: 9901, token: '', agent_port: 9110 }
+    form.value = { name: '', ip: '', port: 9901, token: '', agent_port: 9110, agent_token: '' }
     emit('changed')
     setTimeout(pingAll, 300)
   } catch (e) {
@@ -229,6 +229,8 @@ onMounted(pingAll)
             <label class="label">Agent port</label>
             <input v-model.number="form.agent_port" type="number" class="input" />
           </div>
+          <label class="label">Agent token (blank = same as API token)</label>
+          <PasswordInput v-model="form.agent_token" class="mb-3" placeholder="leave blank to reuse API token" />
           <p v-if="addErr" class="mb-3 rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-400">{{ addErr }}</p>
           <div class="flex justify-end gap-2">
             <button type="button" class="btn-ghost" @click="showAdd = false">Close</button>

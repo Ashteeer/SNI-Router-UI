@@ -36,6 +36,7 @@ def init():
                 port INTEGER NOT NULL,
                 token TEXT DEFAULT '',
                 agent_port INTEGER DEFAULT 9110,
+                agent_token TEXT DEFAULT '',
                 created_at INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS metrics(
@@ -60,6 +61,9 @@ def init():
                 c.execute("ALTER TABLE hosts DROP COLUMN metrics_port")
             except sqlite3.OperationalError:
                 pass
+        # agent may use a different token than the router api (blank = same token)
+        if "agent_token" not in cols:
+            c.execute("ALTER TABLE hosts ADD COLUMN agent_token TEXT DEFAULT ''")
 
 
 # ---- settings ----
@@ -90,19 +94,19 @@ def get_host(host_id):
     return dict(row) if row else None
 
 
-def add_host(name, ip, port, token="", agent_port=9110):
+def add_host(name, ip, port, token="", agent_port=9110, agent_token=""):
     with _lock, _conn() as c:
         cur = c.execute(
-            "INSERT INTO hosts(name,ip,port,token,agent_port,created_at) "
-            "VALUES(?,?,?,?,?,?)",
-            (name, ip, int(port), token, int(agent_port), int(time.time())),
+            "INSERT INTO hosts(name,ip,port,token,agent_port,agent_token,created_at) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (name, ip, int(port), token, int(agent_port), agent_token, int(time.time())),
         )
         return cur.lastrowid
 
 
 def update_host(host_id, **fields):
     """Update the given columns of a host. Only known columns are applied."""
-    allowed = ("name", "ip", "port", "token", "agent_port")
+    allowed = ("name", "ip", "port", "token", "agent_port", "agent_token")
     sets = {k: v for k, v in fields.items() if k in allowed and v is not None}
     if not sets:
         return
