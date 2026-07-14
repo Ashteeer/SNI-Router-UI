@@ -37,3 +37,9 @@ body {
 /* uPlot dark tweaks */
 .uplot, .uplot * { font-family: inherit; }
 .u-legend { color: #cbd5e1; }
+/* drag-to-zoom selection: shaded band with "from"/"to" vertical edges */
+.uplot .u-select {
+  background: rgba(99, 102, 241, 0.18);
+  border-left: 1.5px solid #818cf8;
+  border-right: 1.5px solid #818cf8;
+}

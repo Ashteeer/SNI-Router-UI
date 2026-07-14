@@ -222,7 +222,7 @@ function addRule(be) { ensure(be, 'http_rules', []).push({ path: '/', action: 'r
         </div>
       </div>
       <div class="card">
-        <h3 class="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">Limits / Log / Metrics / Admin</h3>
+        <h3 class="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">Limits / Log / API</h3>
         <label class="label">max_conns_per_ip</label>
         <input :value="model.limits?.max_conns_per_ip" type="number" class="input mb-3"
           @input="ensure(model, 'limits', {}).max_conns_per_ip = Number($event.target.value)" />
@@ -231,12 +231,12 @@ function addRule(be) { ensure(be, 'http_rules', []).push({ path: '/', action: 'r
           @change="ensure(model, 'log', {}).level = $event.target.value">
           <option v-for="lv in ['error', 'warn', 'info', 'debug', 'trace']" :key="lv" :value="lv">{{ lv }}</option>
         </select>
-        <label class="label">metrics.bind</label>
-        <input :value="model.metrics?.bind" class="input mb-3" placeholder="127.0.0.1:9100"
-          @input="ensure(model, 'metrics', {}).bind = $event.target.value" />
-        <label class="label">admin.bind</label>
-        <input :value="model.admin?.bind" class="input" placeholder="127.0.0.1:9901"
-          @input="ensure(model, 'admin', {}).bind = $event.target.value" />
+        <label class="label">api.bind (config + metrics + control)</label>
+        <input :value="model.api?.bind" class="input mb-3" placeholder="0.0.0.0:9901"
+          @input="ensure(model, 'api', {}).bind = $event.target.value" />
+        <label class="label">api.token</label>
+        <input :value="model.api?.token" class="input" placeholder="Bearer token"
+          @input="ensure(model, 'api', {}).token = $event.target.value" />
       </div>
     </section>
   </div>

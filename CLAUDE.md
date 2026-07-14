@@ -134,9 +134,9 @@ the fronting sni-router) else the socket peer. Admin password is scrypt-hashed.
 (`ssh.py`, paramiko), run from the endpoints via `asyncio.to_thread`. SSH creds
 are per-request and **never stored**. Agent: the local `scripts/install-agent.sh`
 is uploaded and run (same version as the site), token generated server-side.
-sni-router: their `install.sh` is piped to bash, then a **base config** (minimal
-valid: one placeholder listener/backend) exposing `admin.bind`+`token`+
-`metrics.bind` is written to `/etc/sni-router/sni-router.yaml` and the service is
+sni-router: their `install.sh` is piped to bash, then a **base config** (an
+API-only config, no listeners/backends) exposing the unified `api` (`bind` +
+`token`) is written to `/etc/sni-router/sni-router.yaml` and the service is
 enabled. Both then create/update the host row (token + ports). No sni-router
 changes were needed — provisioning writes the config file directly, so even a
 read-only-admin build works.
@@ -151,7 +151,7 @@ read-only-admin build works.
   editing (Settings), and SSH remote provisioning. Frontend not rebuilt since
   these UI additions — run `npm run build` before shipping.
 - Visual configurator covers listeners, backends (mode-aware), timeouts, limits,
-  log, metrics, admin. Anything it doesn't surface is always editable in Manual.
+  log, api. Anything it doesn't surface is always editable in Manual.
 - Published: https://github.com/Ashteeer/SNI-Router-UI
 
 ### Compatibility note
@@ -159,9 +159,10 @@ read-only-admin build works.
 Some sni-router builds ship a **read-only** admin API — `PUT /config`,
 `POST /reload`, and `POST /restart` return `405 Method Not Allowed`. Read
 features (status, config view, metrics) work regardless; the UI surfaces the 405
-as an error on Save/Restart. `/metrics` is served on its own port
-(`metrics.bind`, default 9100), separate from `admin.bind` (default 9901) — the
-UI stores both per host (`metrics_port`, plus `agent_port` for the agent).
+as an error on Save/Restart. `/status`, `/config`, `/metrics` and the control
+endpoints all share **one bind + one token** (config.md §8, `api.bind`, default
+port 9901) — the UI stores that single port + token per host (plus `agent_port`
+for the metrics agent, which reuses the same token).
 
 ## Conventions / notes
 

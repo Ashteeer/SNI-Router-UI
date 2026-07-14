@@ -69,11 +69,10 @@ async def fetch_agent(host):
 
 async def poll_host(host):
     values = {"up": 0}
-    # /metrics is served on its own port (metrics.bind), separate from admin.
-    mport = host.get("metrics_port") or 9100
+    # /metrics is served on the unified api bind (same port + token as admin).
     try:
         async with httpx.AsyncClient(timeout=8) as cl:
-            r = await cl.get(f"http://{host['ip']}:{mport}/metrics", headers=_auth_headers(host))
+            r = await cl.get(f"{admin_base(host)}/metrics", headers=_auth_headers(host))
         if r.status_code == 200:
             values.update(parse_prom(r.text))
             values["up"] = 1

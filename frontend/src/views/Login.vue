@@ -1,6 +1,7 @@
 <script setup>
 import { ref } from 'vue'
 import { api } from '../api'
+import PasswordInput from '../components/PasswordInput.vue'
 
 const props = defineProps({ mode: String }) // 'setup' | 'login'
 const emit = defineEmits(['authed'])
@@ -45,7 +46,7 @@ async function submit() {
       <input v-model="username" class="input mb-3" autocomplete="username" required />
 
       <label class="label">Password</label>
-      <input v-model="password" type="password" class="input mb-3"
+      <PasswordInput v-model="password" class="mb-3"
              :autocomplete="mode === 'setup' ? 'new-password' : 'current-password'" required />
 
       <template v-if="mode === 'setup'">

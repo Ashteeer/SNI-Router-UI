@@ -32,6 +32,9 @@ export const api = {
   getLocalConfig: () => req('GET', '/config'),
   putLocalConfig: (values) => req('PUT', '/config', { values }),
 
+  // discover a sni-router config on the UI host (Add Host convenience)
+  discoverLocal: () => req('GET', '/config/discover'),
+
   // remote provisioning over SSH
   provisionAgent: (d) => req('POST', '/provision/agent', d),
   provisionRouter: (d) => req('POST', '/provision/sni-router', d),

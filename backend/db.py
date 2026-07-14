@@ -36,7 +36,6 @@ def init():
                 port INTEGER NOT NULL,
                 token TEXT DEFAULT '',
                 agent_port INTEGER DEFAULT 9110,
-                metrics_port INTEGER DEFAULT 9100,
                 created_at INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS metrics(
@@ -52,10 +51,15 @@ def init():
             CREATE INDEX IF NOT EXISTS idx_metrics ON metrics(host_id, ts);
             """
         )
-        # migrate older DBs that predate a column
+        # migrate: sni-router unified admin+metrics into one api port (config.md §8),
+        # so the separate metrics_port column is gone. Drop it if an older DB has it.
+        # ponytail: needs SQLite ≥3.35 (Ubuntu 24.04 = 3.45); ignore if unsupported.
         cols = {r["name"] for r in c.execute("PRAGMA table_info(hosts)").fetchall()}
-        if "metrics_port" not in cols:
-            c.execute("ALTER TABLE hosts ADD COLUMN metrics_port INTEGER DEFAULT 9100")
+        if "metrics_port" in cols:
+            try:
+                c.execute("ALTER TABLE hosts DROP COLUMN metrics_port")
+            except sqlite3.OperationalError:
+                pass
 
 
 # ---- settings ----
@@ -86,19 +90,19 @@ def get_host(host_id):
     return dict(row) if row else None
 
 
-def add_host(name, ip, port, token="", agent_port=9110, metrics_port=9100):
+def add_host(name, ip, port, token="", agent_port=9110):
     with _lock, _conn() as c:
         cur = c.execute(
-            "INSERT INTO hosts(name,ip,port,token,agent_port,metrics_port,created_at) "
-            "VALUES(?,?,?,?,?,?,?)",
-            (name, ip, int(port), token, int(agent_port), int(metrics_port), int(time.time())),
+            "INSERT INTO hosts(name,ip,port,token,agent_port,created_at) "
+            "VALUES(?,?,?,?,?,?)",
+            (name, ip, int(port), token, int(agent_port), int(time.time())),
         )
         return cur.lastrowid
 
 
 def update_host(host_id, **fields):
     """Update the given columns of a host. Only known columns are applied."""
-    allowed = ("name", "ip", "port", "token", "agent_port", "metrics_port")
+    allowed = ("name", "ip", "port", "token", "agent_port")
     sets = {k: v for k, v in fields.items() if k in allowed and v is not None}
     if not sets:
         return

@@ -218,11 +218,46 @@ async def put_config_local(request: Request, user=Depends(require_auth)):
     return {"ok": True, "values": values, "restart_required": True}
 
 
+# ---------- discover a sni-router config on THIS host (Add Host convenience) ----------
+# ponytail: regex parse of the api block — no YAML dep for two fields.
+LOCAL_ROUTER_CONFIGS = ["/etc/sni-router/sni-router.yaml", "/etc/sni-router/sni-router.yml"]
+
+
+def _yaml_block(text, key):
+    m = re.search(rf"(?ms)^{key}:\s*\n(.*?)(?=^\S|\Z)", text)
+    return m.group(1) if m else ""
+
+
+def _yaml_field(block, key):
+    m = re.search(rf'(?m)^\s+{key}:\s*["\']?([^"\'\n#]+)', block)
+    return m.group(1).strip() if m else None
+
+
+@app.get("/api/config/discover")
+def discover_local_router(user=Depends(require_auth)):
+    for path in LOCAL_ROUTER_CONFIGS:
+        if not os.path.isfile(path):
+            continue
+        with open(path, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+        apib = _yaml_block(text, "api")
+        bind = _yaml_field(apib, "bind") or ""
+        host, _, port = bind.rpartition(":")
+        if host in ("0.0.0.0", "", "::", "[::]"):
+            host = "127.0.0.1"
+        return {
+            "found": True, "path": path, "ip": host,
+            "port": int(port) if port.isdigit() else 9901,
+            "token": _yaml_field(apib, "token") or "",
+        }
+    raise HTTPException(status_code=404, detail="no local sni-router config found "
+                        f"(looked in {', '.join(LOCAL_ROUTER_CONFIGS)})")
+
+
 # ---------- hosts ----------
 def _host_public(h):
     return {"id": h["id"], "name": h["name"], "ip": h["ip"], "port": h["port"],
-            "agent_port": h["agent_port"], "metrics_port": h["metrics_port"],
-            "has_token": bool(h["token"])}
+            "agent_port": h["agent_port"], "has_token": bool(h["token"])}
 
 
 @app.get("/api/hosts")
@@ -236,7 +271,7 @@ async def create_host(request: Request, user=Depends(require_auth)):
     if not d.get("name") or not d.get("ip") or not d.get("port"):
         raise HTTPException(status_code=400, detail="name, ip, port required")
     hid = db.add_host(d["name"], d["ip"], d["port"], d.get("token", ""),
-                      d.get("agent_port", 9110), d.get("metrics_port", 9100))
+                      d.get("agent_port", 9110))
     return _host_public(db.get_host(hid))
 
 
@@ -302,24 +337,24 @@ async def get_config(host_id: int, user=Depends(require_auth)):
         raise HTTPException(status_code=502, detail=f"host unreachable: {e}")
 
 
-def inject_admin_token(text, token):
-    """GET /config redacts admin.token, so a round-tripped save would be rejected.
-    The stored host token IS the router's admin token — re-insert it under the
-    admin block unless the body already carries one. ponytail: block-style only;
+def inject_api_token(text, token):
+    """GET /config redacts api.token, so a round-tripped save would be rejected.
+    The stored host token IS the router's api token — re-insert it under the
+    api block unless the body already carries one. ponytail: block-style only;
     if a user hand-writes their own token: line we leave it untouched.
     """
-    if not token or not re.search(r"(?m)^admin:\s*$", text):
+    if not token or not re.search(r"(?m)^api:\s*$", text):
         return text
-    block = re.search(r"(?ms)^admin:\s*\n(.*?)(?=^\S|\Z)", text)
+    block = re.search(r"(?ms)^api:\s*\n(.*?)(?=^\S|\Z)", text)
     if block and re.search(r"(?m)^\s+token:", block.group(1)):
         return text  # user supplied one
-    return re.sub(r"(?m)^(admin:\s*)$", rf'\1\n  token: "{token}"', text, count=1)
+    return re.sub(r"(?m)^(api:\s*)$", rf'\1\n  token: "{token}"', text, count=1)
 
 
 @app.put("/api/hosts/{host_id}/config")
 async def put_config(host_id: int, request: Request, user=Depends(require_auth)):
     host = require_host(host_id)
-    body = inject_admin_token((await request.body()).decode("utf-8", "replace"), host["token"]).encode()
+    body = inject_api_token((await request.body()).decode("utf-8", "replace"), host["token"]).encode()
     try:
         r = await collector.admin_request(host, "PUT", "/config", content=body, timeout=20)
         # sni-router returns JSON on both success and validation error

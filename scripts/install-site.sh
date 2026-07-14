@@ -77,13 +77,14 @@ python3 -m venv "$INSTALL_DIR/backend/.venv"
 "$INSTALL_DIR/backend/.venv/bin/pip" install -q --upgrade pip
 "$INSTALL_DIR/backend/.venv/bin/pip" install -q -r "$INSTALL_DIR/backend/requirements.txt"
 
-if [ ! -d "$INSTALL_DIR/frontend/dist" ]; then
-  if command -v npm >/dev/null 2>&1; then
-    echo ">> building frontend (npm)"
-    ( cd "$INSTALL_DIR/frontend" && npm install --no-audit --no-fund --silent && npm run build --silent )
-  else
-    die "frontend not built and npm not found. Install Node 18+ and re-run, or build frontend/dist elsewhere and copy it to $INSTALL_DIR/frontend/dist"
-  fi
+# Always rebuild when npm is present: the git tarball ships no dist/, so on an
+# upgrade the OLD dist lingers — skipping the build would keep serving stale JS.
+if command -v npm >/dev/null 2>&1; then
+  echo ">> building frontend (npm)"
+  rm -rf "$INSTALL_DIR/frontend/dist"
+  ( cd "$INSTALL_DIR/frontend" && npm install --no-audit --no-fund --silent && npm run build --silent )
+elif [ ! -d "$INSTALL_DIR/frontend/dist" ]; then
+  die "frontend not built and npm not found. Install Node 18+ and re-run, or build frontend/dist elsewhere and copy it to $INSTALL_DIR/frontend/dist"
 fi
 
 umask 022

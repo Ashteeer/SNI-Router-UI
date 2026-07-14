@@ -15,6 +15,7 @@ const props = defineProps({
 const wrap = ref(null)
 let plot = null
 let ro = null
+let zoomed = false // user drag-zoomed → keep their window across live data refreshes
 
 function makeOpts(width) {
   return {
@@ -45,13 +46,20 @@ function makeOpts(width) {
     ],
     cursor: { drag: { x: true, y: false }, points: { size: 6 } },
     legend: { live: true },
+    hooks: {
+      // drag-select zooms → remember it so live refreshes don't snap back
+      setSelect: [(u) => { if (u.select.width > 0) zoomed = true }],
+    },
   }
 }
 
 function build() {
   if (plot) { plot.destroy(); plot = null }
+  zoomed = false
   const width = wrap.value?.clientWidth || 600
   plot = new uPlot(makeOpts(width), props.data, wrap.value)
+  // uPlot's built-in dblclick resets the view; clear our flag so it follows again
+  wrap.value.addEventListener('dblclick', () => { zoomed = false })
 }
 
 onMounted(async () => {
@@ -69,7 +77,8 @@ onBeforeUnmount(() => {
 })
 
 // New data of same shape: cheap setData. Series shape change: rebuild.
-watch(() => props.data, (d) => { if (plot) plot.setData(d) })
+// resetScales=false while zoomed keeps the user's window; otherwise follow new data
+watch(() => props.data, (d) => { if (plot) plot.setData(d, !zoomed) })
 watch(() => props.series, () => build())
 </script>
 

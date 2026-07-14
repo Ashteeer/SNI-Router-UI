@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { api } from '../api'
+import PasswordInput from '../components/PasswordInput.vue'
 
 const props = defineProps({ hosts: Array })
 const emit = defineEmits(['changed'])
@@ -8,9 +9,26 @@ const emit = defineEmits(['changed'])
 const checked = ref(new Set())
 const status = ref({}) // id -> 'online' | 'offline' | 'checking'
 const showAdd = ref(false)
-const form = ref({ name: '', ip: '', port: 9901, token: '', metrics_port: 9100, agent_port: 9110 })
+const form = ref({ name: '', ip: '', port: 9901, token: '', agent_port: 9110 })
 const addErr = ref('')
 const busy = ref(false)
+const discovering = ref(false)
+
+async function discoverLocal() {
+  addErr.value = ''
+  discovering.value = true
+  try {
+    const d = await api.discoverLocal()
+    form.value.ip = d.ip
+    form.value.port = d.port
+    form.value.token = d.token
+    if (!form.value.name) form.value.name = 'local'
+  } catch (e) {
+    addErr.value = e.message
+  } finally {
+    discovering.value = false
+  }
+}
 
 // --- remote install (SSH provisioning) ---
 const showInstall = ref(false)
@@ -25,7 +43,7 @@ function defaultInstall() {
     ssh: { host: '', port: 22, user: 'root', authMethod: 'password', password: '', key: '' },
     name: '',
     agent_bind: '0.0.0.0', agent_port: '',
-    admin_bind: '0.0.0.0', admin_port: 9901, metrics_port: 9100,
+    api_bind: '0.0.0.0', api_port: 9901,
     version: '',
   }
 }
@@ -54,9 +72,8 @@ async function runInstall() {
       })
     } else {
       instResult.value = await api.provisionRouter({
-        ssh, name: i.name || i.ssh.host, admin_bind: i.admin_bind,
-        admin_port: Number(i.admin_port) || 9901,
-        metrics_port: Number(i.metrics_port) || 9100,
+        ssh, name: i.name || i.ssh.host, api_bind: i.api_bind,
+        api_port: Number(i.api_port) || 9901,
         version: i.version || null,
       })
     }
@@ -79,6 +96,7 @@ function toggleAll(e) {
 
 async function pingAll() {
   for (const h of props.hosts) {
+    if (h?.id == null) continue // never ping a host without an id (avoids /hosts/undefined/status)
     status.value[h.id] = 'checking'
     try {
       await api.status(h.id)
@@ -95,7 +113,7 @@ async function addHost() {
   try {
     await api.addHost(form.value)
     showAdd.value = false
-    form.value = { name: '', ip: '', port: 9901, token: '', metrics_port: 9100, agent_port: 9110 }
+    form.value = { name: '', ip: '', port: 9901, token: '', agent_port: 9110 }
     emit('changed')
     setTimeout(pingAll, 300)
   } catch (e) {
@@ -188,30 +206,28 @@ onMounted(pingAll)
             </svg>
           </button>
         </div>
+        <button type="button" class="btn-ghost mb-4 w-full justify-center" :disabled="discovering"
+                @click="discoverLocal">
+          {{ discovering ? 'Searching…' : '🔍 Find local sni-router config' }}
+        </button>
         <form @submit.prevent="addHost">
           <label class="label">Server Name</label>
           <input v-model="form.name" class="input mb-3" required />
           <div class="mb-3 grid grid-cols-3 gap-3">
             <div class="col-span-2">
-              <label class="label">Admin API IP</label>
+              <label class="label">API IP</label>
               <input v-model="form.ip" class="input" placeholder="127.0.0.1" required />
             </div>
             <div>
-              <label class="label">Port</label>
+              <label class="label">API Port</label>
               <input v-model.number="form.port" type="number" class="input" required />
             </div>
           </div>
           <label class="label">API Token (required for save/restart)</label>
-          <input v-model="form.token" class="input mb-3" placeholder="Bearer token" />
-          <div class="mb-3 grid grid-cols-2 gap-3">
-            <div>
-              <label class="label">Metrics port</label>
-              <input v-model.number="form.metrics_port" type="number" class="input" />
-            </div>
-            <div>
-              <label class="label">Agent port</label>
-              <input v-model.number="form.agent_port" type="number" class="input" />
-            </div>
+          <PasswordInput v-model="form.token" class="mb-3" placeholder="Bearer token" />
+          <div class="mb-3">
+            <label class="label">Agent port</label>
+            <input v-model.number="form.agent_port" type="number" class="input" />
           </div>
           <p v-if="addErr" class="mb-3 rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-400">{{ addErr }}</p>
           <div class="flex justify-end gap-2">
@@ -265,8 +281,8 @@ onMounted(pingAll)
                 :class="inst.ssh.authMethod === 'key' ? 'bg-brand text-white' : 'bg-slate-800 text-slate-300'"
                 @click="inst.ssh.authMethod = 'key'">Private key</button>
             </div>
-            <input v-if="inst.ssh.authMethod === 'password'" v-model="inst.ssh.password" type="password"
-                   class="input mb-3" placeholder="SSH password" autocomplete="off" />
+            <PasswordInput v-if="inst.ssh.authMethod === 'password'" v-model="inst.ssh.password"
+                   class="mb-3" placeholder="SSH password" autocomplete="off" />
             <textarea v-else v-model="inst.ssh.key" class="input mb-3 h-24 font-mono text-xs"
                       placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
 
@@ -277,10 +293,9 @@ onMounted(pingAll)
               <div><label class="label">Agent bind IP</label><input v-model="inst.agent_bind" class="input" /></div>
               <div><label class="label">Agent port (blank = random)</label><input v-model="inst.agent_port" type="number" class="input" /></div>
             </div>
-            <div v-else class="mb-3 grid grid-cols-3 gap-3">
-              <div><label class="label">Admin bind IP</label><input v-model="inst.admin_bind" class="input" /></div>
-              <div><label class="label">Admin port</label><input v-model.number="inst.admin_port" type="number" class="input" /></div>
-              <div><label class="label">Metrics port</label><input v-model.number="inst.metrics_port" type="number" class="input" /></div>
+            <div v-else class="mb-3 grid grid-cols-2 gap-3">
+              <div><label class="label">API bind IP</label><input v-model="inst.api_bind" class="input" /></div>
+              <div><label class="label">API port</label><input v-model.number="inst.api_port" type="number" class="input" /></div>
             </div>
 
             <label class="label">Version (blank = latest)</label>
@@ -309,8 +324,8 @@ onMounted(pingAll)
             <div v-if="instResult.agent_port">
               <span class="text-slate-400">Agent port:</span> <span class="text-slate-200">{{ instResult.agent_port }}</span>
             </div>
-            <div v-if="instResult.admin_port">
-              <span class="text-slate-400">Admin port:</span> <span class="text-slate-200">{{ instResult.admin_port }}</span>
+            <div v-if="instResult.api_port">
+              <span class="text-slate-400">API port:</span> <span class="text-slate-200">{{ instResult.api_port }}</span>
             </div>
           </div>
           <label class="label">Install log</label>
