@@ -2,12 +2,13 @@
 // Mode-aware forms over the parsed config object. Mutates `model` in place;
 // the parent watches it deeply and re-serializes to YAML (kept in sync with
 // the manual editor). See config.md for the field-applicability matrix.
+import { ref } from 'vue'
+
 const props = defineProps({ model: Object })
 
 const MODES = ['passthrough', 'terminate', 'terminate_tcp', 'redirect_https']
 const PROXY = ['none', 'v1', 'v2']
 const BALANCE = ['round_robin', 'least_conn']
-const ACTIONS = ['forward', 'respond', 'redirect']
 
 // field applicability by mode
 const uses = {
@@ -52,7 +53,58 @@ function renameBackend(oldName, e) {
 }
 function delBackend(name) { delete props.model.backends[name] }
 function addServer(be) { ensure(be, 'servers', []).push('') }
-function addRule(be) { ensure(be, 'http_rules', []).push({ path: '/', action: 'respond', status: 200 }) }
+// new rules default to a 404 catch-all (path "*") — a valid, common "deny the rest"
+function addRule(be) {
+  ensure(be, 'http_rules', []).push({ path: '*', action: 'respond', status: 404, body: 'not found\n', content_type: 'text/plain' })
+}
+
+// --- HTTP-rule presets: hide sni-router's action/status syntax behind simple types.
+// The two presets (301 / 404) auto-fill everything; forward/respond/redirect are the
+// manual "advanced" escapes. ruleType() derives the current type from the raw rule.
+function ruleType(r) {
+  if (r.action === 'redirect') return (r.status == null || r.status === 301) ? '301' : 'redirect'
+  if (r.action === 'respond') return r.status === 404 ? '404' : 'respond'
+  return r.action || 'forward'
+}
+function setRuleType(r, type) {
+  const keepTo = r.to
+  delete r.status; delete r.to; delete r.body; delete r.content_type
+  if (type === '301') { r.action = 'redirect'; r.status = 301; r.to = keepTo || 'https' }
+  else if (type === '404') { r.action = 'respond'; r.status = 404; r.body = 'not found\n'; r.content_type = 'text/plain' }
+  else if (type === 'forward') { r.action = 'forward' }
+  else if (type === 'respond') { r.action = 'respond'; r.status = 200 }
+  else if (type === 'redirect') { r.action = 'redirect'; r.status = 302; r.to = keepTo || 'https' }
+}
+
+// --- drag-to-reorder (native HTML5 DnD, no dep). `kind` scopes the drag so items
+// can't cross categories; `key` scopes routes to their listener / rules to their
+// backend. The drop handler nulls `drag` first, so a bubbled parent drop is a no-op.
+const drag = ref(null) // { kind, key, from } | null
+function dragStart(kind, from, key = null) { drag.value = { kind, key, from } }
+function dragEnd() { drag.value = null }
+function moveArr(arr, from, to) {
+  if (!arr || from === to || from < 0) return
+  const [it] = arr.splice(from, 1)
+  arr.splice(to, 0, it)
+}
+function moveBackend(from, to) {
+  const names = Object.keys(props.model.backends || {})
+  if (from === to || from < 0) return
+  const [n] = names.splice(from, 1)
+  names.splice(to, 0, n)
+  const rebuilt = {}
+  for (const k of names) rebuilt[k] = props.model.backends[k]
+  props.model.backends = rebuilt // reassign a map property → deep watcher re-dumps
+}
+function dropOn(kind, to, key = null) {
+  const d = drag.value
+  drag.value = null
+  if (!d || d.kind !== kind || d.key !== key) return
+  if (kind === 'listener') moveArr(props.model.listeners, d.from, to)
+  else if (kind === 'backend') moveBackend(d.from, to)
+  else if (kind === 'route') moveArr(props.model.listeners[key].routes, d.from, to)
+  else if (kind === 'rule') moveArr(props.model.backends[key].http_rules, d.from, to)
+}
 </script>
 
 <template>
@@ -63,7 +115,15 @@ function addRule(be) { ensure(be, 'http_rules', []).push({ path: '/', action: 'r
         <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-400">Listeners</h3>
         <button class="btn-ghost" @click="addListener">+ Listener</button>
       </div>
-      <div v-for="(l, li) in model.listeners" :key="li" class="card mb-3">
+      <div v-for="(l, li) in model.listeners" :key="li" class="card mb-3"
+           :class="{ 'opacity-50': drag?.kind === 'listener' && drag?.from === li }"
+           @dragover.prevent @drop="dropOn('listener', li)">
+        <div class="mb-2 flex items-center gap-2">
+          <span class="cursor-grab select-none text-lg leading-none text-slate-500 hover:text-slate-300"
+                draggable="true" @dragstart="dragStart('listener', li)" @dragend="dragEnd"
+                title="Drag to reorder">⠿</span>
+          <span class="text-xs uppercase tracking-wide text-slate-500">Listener {{ li + 1 }}</span>
+        </div>
         <div class="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div>
             <label class="label">Name</label>
@@ -88,8 +148,13 @@ function addRule(be) { ensure(be, 'http_rules', []).push({ path: '/', action: 'r
         </div>
         <button class="btn-ghost mb-3" @click="addBind(l)">+ bind</button>
 
-        <label class="label">Routes (first match wins)</label>
-        <div v-for="(r, ri) in l.routes" :key="ri" class="mb-2 flex gap-2">
+        <label class="label">Routes (first match wins — drag ⠿ to reorder)</label>
+        <div v-for="(r, ri) in l.routes" :key="ri" class="mb-2 flex items-center gap-2"
+             :class="{ 'opacity-50': drag?.kind === 'route' && drag?.key === li && drag?.from === ri }"
+             @dragover.prevent @drop="dropOn('route', ri, li)">
+          <span class="cursor-grab select-none text-lg leading-none text-slate-500 hover:text-slate-300"
+                draggable="true" @dragstart="dragStart('route', ri, li)" @dragend="dragEnd"
+                title="Drag to reorder">⠿</span>
           <input v-model="r.sni" class="input" placeholder="*.example.com or *" />
           <select v-model="r.backend" class="input">
             <option v-for="n in backendNames()" :key="n" :value="n">{{ n }}</option>
@@ -106,7 +171,15 @@ function addRule(be) { ensure(be, 'http_rules', []).push({ path: '/', action: 'r
         <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-400">Backends</h3>
         <button class="btn-ghost" @click="addBackend">+ Backend</button>
       </div>
-      <div v-for="(be, name) in model.backends" :key="name" class="card mb-3">
+      <div v-for="(be, name, bi) in model.backends" :key="name" class="card mb-3"
+           :class="{ 'opacity-50': drag?.kind === 'backend' && drag?.from === bi }"
+           @dragover.prevent @drop="dropOn('backend', bi)">
+        <div class="mb-2 flex items-center gap-2">
+          <span class="cursor-grab select-none text-lg leading-none text-slate-500 hover:text-slate-300"
+                draggable="true" @dragstart="dragStart('backend', bi)" @dragend="dragEnd"
+                title="Drag to reorder">⠿</span>
+          <span class="text-xs uppercase tracking-wide text-slate-500">Backend</span>
+        </div>
         <div class="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div>
             <label class="label">Name</label>
@@ -188,20 +261,56 @@ function addRule(be) { ensure(be, 'http_rules', []).push({ path: '/', action: 'r
 
         <!-- http_rules -->
         <template v-if="uses.http_rules(be.mode)">
-          <label class="label mt-3">HTTP rules (first match wins)</label>
-          <div v-for="(r, ri) in be.http_rules" :key="ri" class="mb-2 rounded-lg border border-slate-800 p-2">
-            <div class="flex gap-2">
-              <input v-model="r.path" class="input" placeholder="/path or *" />
-              <select v-model="r.action" class="input w-40">
-                <option v-for="a in ACTIONS" :key="a" :value="a">{{ a }}</option>
+          <label class="label mt-3">HTTP rules (first match wins — drag ⠿ to reorder)</label>
+          <div v-for="(r, ri) in be.http_rules" :key="ri"
+               class="mb-2 rounded-lg border border-slate-800 p-2"
+               :class="{ 'opacity-50': drag?.kind === 'rule' && drag?.key === name && drag?.from === ri }"
+               @dragover.prevent @drop="dropOn('rule', ri, name)">
+            <div class="flex items-center gap-2">
+              <span class="cursor-grab select-none text-lg leading-none text-slate-500 hover:text-slate-300"
+                    draggable="true" @dragstart="dragStart('rule', ri, name)" @dragend="dragEnd"
+                    title="Drag to reorder">⠿</span>
+              <input v-model="r.path" class="input" placeholder="*  (all paths)  or  /prefix" />
+              <select :value="ruleType(r)" @change="setRuleType(r, $event.target.value)" class="input w-52">
+                <option value="301">301 → https / custom port</option>
+                <option value="404">404 Not Found</option>
+                <option value="forward">forward (advanced)</option>
+                <option value="respond">respond (advanced)</option>
+                <option value="redirect">redirect (advanced)</option>
               </select>
               <button class="btn-ghost" @click="be.http_rules.splice(ri, 1)">✕</button>
             </div>
-            <div class="mt-2 grid grid-cols-2 gap-2">
-              <input v-if="r.action !== 'forward'" v-model.number="r.status" type="number" class="input" placeholder="status" />
-              <input v-if="r.action === 'redirect'" v-model="r.to" class="input" placeholder="https or absolute URL" />
-              <input v-if="r.action === 'respond'" v-model="r.body" class="input" placeholder="body" />
-              <input v-if="r.action === 'respond'" v-model="r.content_type" class="input" placeholder="content_type" />
+            <p class="mt-1 pl-8 text-xs text-slate-500">
+              Path is a <b>prefix</b> match: <code>/api</code> matches <code>/api</code> and <code>/api/…</code>.
+              For <b>all</b> paths use <code>*</code> — no trailing <code>*</code> after a slash needed.
+            </p>
+
+            <!-- 301 preset: only the target to fill -->
+            <div v-if="ruleType(r) === '301'" class="mt-2 pl-8">
+              <input v-model="r.to" class="input" placeholder="https   ·   or   https://host:8443" />
+              <p class="mt-1 text-xs text-slate-500">
+                Sends <b>301</b> → <code>Location</code>. <code>https</code> upgrades to HTTPS on the
+                same host (:443); for a <b>custom port</b> enter a full URL, e.g. <code>https://host:8443</code>.
+              </p>
+            </div>
+            <!-- 404 preset: nothing to fill -->
+            <p v-else-if="ruleType(r) === '404'" class="mt-2 pl-8 text-xs text-slate-500">
+              Returns <b>404</b> with body “not found”. Nothing else to configure.
+            </p>
+            <!-- forward: nothing to fill -->
+            <p v-else-if="ruleType(r) === 'forward'" class="mt-2 pl-8 text-xs text-slate-500">
+              Forwards matching requests to this backend's servers.
+            </p>
+            <!-- respond (advanced) -->
+            <div v-else-if="ruleType(r) === 'respond'" class="mt-2 grid grid-cols-2 gap-2 pl-8">
+              <input v-model.number="r.status" type="number" class="input" placeholder="status (e.g. 200)" />
+              <input v-model="r.content_type" class="input" placeholder="content_type (text/plain)" />
+              <input v-model="r.body" class="input col-span-2" placeholder="body" />
+            </div>
+            <!-- redirect (advanced) -->
+            <div v-else class="mt-2 grid grid-cols-2 gap-2 pl-8">
+              <input v-model.number="r.status" type="number" class="input" placeholder="status (302 / 307 / 308)" />
+              <input v-model="r.to" class="input" placeholder="https or absolute URL" />
             </div>
           </div>
           <button class="btn-ghost" @click="addRule(be)">+ rule</button>

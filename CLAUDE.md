@@ -188,6 +188,14 @@ so even a read-only-admin build works.
   these UI additions — run `npm run build` before shipping.
 - Visual configurator covers listeners, backends (mode-aware), timeouts, limits,
   log, api. Anything it doesn't surface is always editable in Manual.
+- **HTTP rules**: a per-rule *type* select with two zero/one-field presets —
+  `301 → https/custom port` (sets `action:redirect status:301`, one `to` field:
+  `https` for same-host:443, or a full URL for a custom port) and `404 Not Found`
+  (`respond` 404 + body) — plus `forward`/`respond`/`redirect` for advanced use.
+  `path` is a prefix match; `*` = all paths (no trailing `*` needed).
+- **Drag-to-reorder** (native HTML5 DnD, no dep) for listeners, routes (within a
+  listener), backends (map keys rebuilt), and http_rules — scoped by `kind`/`key`
+  so items can't cross categories.
 - Published: https://github.com/Ashteeer/SNI-Router-UI
 
 ### Compatibility note
