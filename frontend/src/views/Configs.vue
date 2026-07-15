@@ -144,7 +144,7 @@ const currentHost = () => props.hosts.find((h) => h.id === props.hostId)
         </div>
       </div>
       <div class="flex items-center gap-2">
-        <button class="btn-ghost" :disabled="busy" @click="load">Reload</button>
+        <button class="btn-ghost" :disabled="!!busy" @click="load">Reload</button>
         <button class="btn-primary" :disabled="busy || !!parseErr" @click="save">
           {{ busy === 'save' ? 'Saving…' : 'Save' }}
         </button>

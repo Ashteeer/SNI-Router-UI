@@ -194,7 +194,7 @@ onBeforeUnmount(() => { clearInterval(liveTimer); clearInterval(histTimer) })
                 installed {{ sys?.ui || '—' }}<span v-if="sys?.latest"> · latest {{ sys.latest }}</span>
               </div>
             </div>
-            <button v-if="sys?.update_available" class="btn-primary" :disabled="updating"
+            <button v-if="sys?.update_available" class="btn-primary" :disabled="!!updating"
               @click="doUpdateUi">{{ updating === 'ui' ? 'Updating…' : 'Update' }}</button>
             <span v-else-if="sys" class="text-xs text-emerald-400">up to date</span>
           </div>
@@ -206,7 +206,7 @@ onBeforeUnmount(() => { clearInterval(liveTimer); clearInterval(histTimer) })
                 <span v-if="agent?.version && sys?.latest"> · latest {{ sys.latest }}</span>
               </div>
             </div>
-            <button v-if="agentUpdate" class="btn-primary" :disabled="updating"
+            <button v-if="agentUpdate" class="btn-primary" :disabled="!!updating"
               @click="doUpdateAgent">{{ updating === 'agent' ? 'Updating…' : 'Update' }}</button>
             <span v-else-if="agent?.version" class="text-xs text-emerald-400">up to date</span>
           </div>
@@ -218,7 +218,7 @@ onBeforeUnmount(() => { clearInterval(liveTimer); clearInterval(histTimer) })
                 <span v-if="sys?.router_latest"> · latest {{ sys.router_latest }}</span>
               </div>
             </div>
-            <button v-if="routerUpdate" class="btn-primary" :disabled="updating"
+            <button v-if="routerUpdate" class="btn-primary" :disabled="!!updating"
               @click="doUpdateRouter">{{ updating === 'router' ? 'Updating…' : 'Update' }}</button>
             <span v-else-if="routerVersion" class="text-xs text-emerald-400">up to date</span>
           </div>
