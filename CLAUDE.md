@@ -134,7 +134,7 @@ systemd units: `backend/sni-router-ui.service`, `agent/sni-router-agent.service`
 | `GET/PUT /settings` | IP whitelist (+ `admin_user` on GET) |
 | `PUT /account` | change admin login/password (authed; no old-pw check) |
 | `GET/PUT /config` | site's local config (`ui.conf`) |
-| `GET /version` · `POST /update/ui` | UI version/latest-check · self-update |
+| `GET /version` (`?force=1` skips 1h cache) · `POST /update/ui` | UI+router latest-check · self-update |
 | `POST /provision` | clean-install agent/router over SSH (`targets`, opt. `host_id`) |
 | `GET /hosts` · `POST /hosts` · `PUT /hosts/{id}` · `DELETE /hosts/{id}` · `POST /hosts/delete` | host CRUD (PUT = edit; incl. `agent_ip`) |
 | `GET /hosts/{id}/status` · `/live` · `/history?range=1h\|6h\|24h\|48h` · `/agent` | metrics · agent `/sys` (IPs+version) |

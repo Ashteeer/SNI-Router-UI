@@ -156,9 +156,9 @@ def version_newer(latest, current):
 _latest = {}  # repo -> {"tag": str, "at": float}; cached ~1h per repo
 
 
-async def latest_release(repo=REPO):
+async def latest_release(repo=REPO, force=False):
     ent = _latest.get(repo)
-    if ent and time.time() - ent["at"] < 3600:
+    if not force and ent and time.time() - ent["at"] < 3600:
         return ent["tag"]
     try:
         async with httpx.AsyncClient(timeout=8) as cl:
@@ -294,11 +294,12 @@ async def put_config_local(request: Request, user=Depends(require_auth)):
 
 # ---------- version / self-update ----------
 @app.get("/api/version")
-async def version(user=Depends(require_auth)):
+async def version(force: bool = False, user=Depends(require_auth)):
+    # force=1 bypasses the 1h GitHub-release cache (the dashboard "Check now" button)
     cur = ui_version()
-    latest = await latest_release(REPO)
+    latest = await latest_release(REPO, force=force)
     return {"ui": cur, "latest": latest, "update_available": version_newer(latest, cur),
-            "router_latest": await latest_release(SNI_ROUTER_REPO)}
+            "router_latest": await latest_release(SNI_ROUTER_REPO, force=force)}
 
 
 @app.post("/api/update/ui")

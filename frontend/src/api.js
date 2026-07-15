@@ -45,8 +45,8 @@ export const api = {
   deleteHost: (id) => req('DELETE', '/hosts/' + id),
   deleteHosts: (ids) => req('POST', '/hosts/delete', { ids }),
 
-  // version + self-update
-  version: () => req('GET', '/version'),
+  // version + self-update (force=true bypasses the backend's 1h release cache)
+  version: (force) => req('GET', force ? '/version?force=1' : '/version'),
   updateUi: () => req('POST', '/update/ui'),
   agentInfo: (id) => req('GET', `/hosts/${id}/agent`),
   updateAgent: (id) => req('POST', `/hosts/${id}/agent-update`),

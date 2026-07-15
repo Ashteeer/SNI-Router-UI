@@ -13,8 +13,9 @@ const live = ref(null)
 const err = ref('')
 const agent = ref(null)     // { ips, version, ... } from the host's metrics agent
 const sys = ref(null)       // { ui, latest, update_available } — web UI self-version
-const updating = ref('')    // '' | 'ui' | 'agent'
+const updating = ref('')    // '' | 'ui' | 'agent' | 'router'
 const updateMsg = ref('')
+const checking = ref(false) // "Check now" (force GitHub re-fetch) in flight
 let liveTimer = null
 let histTimer = null
 
@@ -59,6 +60,13 @@ async function loadAgent() {
 }
 async function loadVersion() {
   try { sys.value = await api.version() } catch { /* offline: no update prompt */ }
+}
+async function checkNow() {
+  checking.value = true
+  updateMsg.value = ''
+  try {
+    sys.value = await api.version(true) // force: skip the backend's 1h release cache
+  } catch (e) { updateMsg.value = 'Check failed: ' + e.message } finally { checking.value = false }
 }
 
 const agentUpdate = computed(() =>
@@ -186,7 +194,13 @@ onBeforeUnmount(() => { clearInterval(liveTimer); clearInterval(histTimer) })
       <!-- System: versions/update + available IPs -->
       <div class="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div class="card">
-          <h3 class="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">Software version</h3>
+          <div class="mb-3 flex items-center justify-between">
+            <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-400">Software version</h3>
+            <button class="text-xs text-slate-400 hover:text-slate-200 disabled:opacity-50"
+              :disabled="checking" @click="checkNow" title="Re-check GitHub for the latest releases now">
+              {{ checking ? 'Checking…' : '↻ Check now' }}
+            </button>
+          </div>
           <div class="flex items-center justify-between gap-3 border-b border-slate-800 py-2">
             <div>
               <div class="text-sm text-slate-300">Web UI</div>
