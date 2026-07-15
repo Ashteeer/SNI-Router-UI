@@ -27,6 +27,7 @@ export const api = {
   logout: () => req('POST', '/logout'),
   getSettings: () => req('GET', '/settings'),
   putSettings: (d) => req('PUT', '/settings', d),
+  changeAccount: (d) => req('PUT', '/account', d),
 
   // local site config (Settings tab)
   getLocalConfig: () => req('GET', '/config'),

@@ -243,7 +243,28 @@ def logout():
 
 @app.get("/api/settings")
 def get_settings(user=Depends(require_auth)):
-    return {"ip_whitelist": whitelist()}
+    return {"ip_whitelist": whitelist(), "admin_user": db.get_setting("admin_user")}
+
+
+@app.put("/api/account")
+async def change_account(request: Request, user=Depends(require_auth)):
+    """Change the admin login and/or password. No old-password check — the caller
+    is already an authenticated session (per the user's request). A blank password
+    keeps the current one."""
+    data = await request.json()
+    username = (data.get("username") or "").strip()
+    password = data.get("password") or ""
+    if not username:
+        raise HTTPException(status_code=400, detail="username required")
+    if password and len(password) < 6:
+        raise HTTPException(status_code=400, detail="password must be at least 6 chars")
+    db.set_setting("admin_user", username)
+    if password:
+        db.set_setting("admin_pw", hash_pw(password))
+    # re-issue the session cookie so it reflects the (possibly) new username
+    resp = JSONResponse({"ok": True})
+    resp.set_cookie("session", sign_session(username), httponly=True, samesite="lax", max_age=SESSION_TTL)
+    return resp
 
 
 @app.put("/api/settings")
@@ -404,7 +425,12 @@ async def get_config(host_id: int, user=Depends(require_auth)):
     host = require_host(host_id)
     try:
         r = await collector.admin_request(host, "GET", "/config", timeout=6)
-        return PlainTextResponse(r.text, status_code=r.status_code)
+        text = r.text
+        # /config redacts api.token; re-insert the stored one so the editor shows
+        # it (and a straight GET→edit→PUT round-trip never wipes it).
+        if r.status_code == 200:
+            text = inject_api_token(text, host["token"])
+        return PlainTextResponse(text, status_code=r.status_code)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"host unreachable: {e}")
 

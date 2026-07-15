@@ -203,6 +203,7 @@ onBeforeUnmount(() => { clearInterval(liveTimer); clearInterval(histTimer) })
               <div class="text-sm text-slate-300">Agent (this host)</div>
               <div class="text-xs text-slate-500">
                 {{ agent?.version ? 'installed ' + agent.version : 'agent offline / not reporting' }}
+                <span v-if="agent?.version && sys?.latest"> · latest {{ sys.latest }}</span>
               </div>
             </div>
             <button v-if="agentUpdate" class="btn-primary" :disabled="updating"

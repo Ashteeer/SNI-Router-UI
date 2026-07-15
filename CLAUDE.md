@@ -25,7 +25,9 @@ current.
   Restart (`POST /restart`) go straight to that host's admin API. Visual covers
   `default_tls` (shared cert) and `log.level`; the header shows the host's IPs.
   Absent sections are stripped (never serialized as `key: null`) before save.
-- **Settings** — edit the site's **local** config (`ui.conf`) + IP whitelist.
+- **Settings** — change the **admin login/password** (no old-password check — the
+  session is already authed), edit the site's **local** config (`ui.conf`) + IP
+  whitelist.
 - **Remote install** (Hosts tab) — **clean-install** the metrics agent and/or
   sni-router (checkboxes) on a remote host over SSH (paramiko), then create a new
   host or **overwrite an existing one** (new/update tabs). Clean install wipes old
@@ -129,7 +131,8 @@ systemd units: `backend/sni-router-ui.service`, `agent/sni-router-agent.service`
 |---|---|
 | `GET /me` | auth/setup state (unauth) |
 | `POST /setup` · `POST /login` · `POST /logout` | first-run / session |
-| `GET/PUT /settings` | IP whitelist |
+| `GET/PUT /settings` | IP whitelist (+ `admin_user` on GET) |
+| `PUT /account` | change admin login/password (authed; no old-pw check) |
 | `GET/PUT /config` | site's local config (`ui.conf`) |
 | `GET /version` · `POST /update/ui` | UI version/latest-check · self-update |
 | `POST /provision` | clean-install agent/router over SSH (`targets`, opt. `host_id`) |
@@ -149,6 +152,9 @@ Source of truth is the parsed config object (`model`).
   overwriting each other.
 - Save sends the editor's YAML verbatim; sni-router validates and returns
   `{applied: reload|restart, downtime}` or a `{errors:[...]}` list (shown inline).
+- `GET /config` redacts `api.token`; the backend re-injects the stored host token
+  into both the GET (so the editor shows it) and the PUT (belt-and-suspenders), so
+  the token is visible and never wiped on a GET→edit→save round-trip.
 
 ## Auth / IP whitelist
 
