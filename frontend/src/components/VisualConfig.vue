@@ -15,6 +15,7 @@ const uses = {
   servers: (m) => m !== 'redirect_https',
   proxy_protocol: (m) => m === 'passthrough' || m === 'terminate_tcp',
   balance: (m) => m !== 'redirect_https',
+  health_check: (m) => m !== 'redirect_https',
   tls: (m) => m === 'terminate' || m === 'terminate_tcp',
   backend_tls: (m) => m === 'terminate',
   headers: (m) => m === 'terminate',
@@ -33,6 +34,11 @@ function addListener() {
   props.model.listeners.push({ name: 'listener', bind: [''], proto: 'tcp', routes: [] })
 }
 function delListener(i) { props.model.listeners.splice(i, 1) }
+// fast_open is tcp-only — on udp it's a hard config error, so drop it with the proto
+function setProto(l, p) {
+  l.proto = p
+  if (p !== 'tcp') delete l.fast_open
+}
 function addBind(l) { l.bind.push('') }
 function addRoute(l) { ensure(l, 'routes', []).push({ sni: '*', backend: backendNames()[0] || '' }) }
 
@@ -43,6 +49,15 @@ function addBackend() {
   let n = 'backend', i = 1
   while (props.model.backends[n]) n = 'backend' + ++i
   props.model.backends[n] = { mode: 'passthrough', servers: [''] }
+}
+// Switching mode must also drop the fields the new mode doesn't use: a leftover
+// `servers: ['']` from the passthrough default is a hard validation error on
+// redirect_https (empty string isn't a valid IP:port), and the rest would only
+// earn "field ignored for this mode" warnings.
+function setMode(be, m) {
+  be.mode = m
+  for (const [k, applies] of Object.entries(uses)) if (!applies(m)) delete be[k]
+  if (uses.servers(m)) ensure(be, 'servers', [''])
 }
 function renameBackend(oldName, e) {
   const nn = e.target.value.trim()
@@ -131,7 +146,7 @@ function dropOn(kind, to, key = null) {
           </div>
           <div>
             <label class="label">Proto</label>
-            <select v-model="l.proto" class="input">
+            <select :value="l.proto || 'tcp'" class="input" @change="setProto(l, $event.target.value)">
               <option value="tcp">tcp</option>
               <option value="udp">udp (QUIC)</option>
             </select>
@@ -139,6 +154,20 @@ function dropOn(kind, to, key = null) {
           <div class="flex items-end justify-end">
             <button class="btn-danger" @click="delListener(li)">Remove</button>
           </div>
+        </div>
+
+        <!-- fast_open (TFO) — tcp only -->
+        <div v-if="(l.proto || 'tcp') === 'tcp'" class="mb-3">
+          <label class="flex items-center gap-2 text-sm text-slate-300">
+            <input :id="'tfo' + li" type="checkbox" :checked="!!l.fast_open"
+                   @change="l.fast_open = $event.target.checked" />
+            TCP Fast Open
+          </label>
+          <p class="mt-1 text-xs text-slate-500">
+            Lets a returning client send its ClientHello inside the SYN, saving one RTT.
+            Needs <code>net.ipv4.tcp_fastopen = 3</code> on the host — otherwise the router
+            still starts, TFO just stays inactive. Changing this restarts the listener.
+          </p>
         </div>
 
         <label class="label">Bind (IP:port)</label>
@@ -187,7 +216,7 @@ function dropOn(kind, to, key = null) {
           </div>
           <div>
             <label class="label">Mode</label>
-            <select v-model="be.mode" class="input">
+            <select :value="be.mode" class="input" @change="setMode(be, $event.target.value)">
               <option v-for="m in MODES" :key="m" :value="m">{{ m }}</option>
             </select>
           </div>
@@ -221,7 +250,7 @@ function dropOn(kind, to, key = null) {
           </div>
         </div>
 
-        <div v-if="uses.balance(be.mode)" class="mt-2 flex items-center gap-2">
+        <div v-if="uses.health_check(be.mode)" class="mt-2 flex items-center gap-2">
           <input :id="'hc' + name" v-model="be.health_check" type="checkbox" />
           <label :for="'hc' + name" class="text-sm text-slate-300">Health check (TCP probe)</label>
         </div>

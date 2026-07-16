@@ -188,6 +188,15 @@ so even a read-only-admin build works.
   these UI additions — run `npm run build` before shipping.
 - Visual configurator covers listeners, backends (mode-aware), timeouts, limits,
   log, api. Anything it doesn't surface is always editable in Manual.
+- **Mode/proto switches prune inapplicable fields.** Changing a backend's `mode`
+  deletes every field the new mode doesn't use (per the `uses` matrix), and
+  switching a listener to `udp` drops `fast_open`. Without this, the passthrough
+  default's `servers: ['']` survived a switch to `redirect_https` and the router
+  rejected the save (empty string is not a valid `IP:port`) — the rest would just
+  raise "field ignored for this mode" warnings.
+- **TCP Fast Open**: per-listener `fast_open` checkbox, shown for `proto: tcp`
+  only (it's a hard config error on `udp`). Needs `net.ipv4.tcp_fastopen = 3` on
+  the host; if unset the router still starts and only warns (config.md §2.2).
 - **HTTP rules**: a per-rule *type* select with two zero/one-field presets —
   `301 → https/custom port` (sets `action:redirect status:301`, one `to` field:
   `https` for same-host:443, or a full URL for a custom port) and `404 Not Found`
