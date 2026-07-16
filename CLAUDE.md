@@ -194,9 +194,24 @@ so even a read-only-admin build works.
   default's `servers: ['']` survived a switch to `redirect_https` and the router
   rejected the save (empty string is not a valid `IP:port`) — the rest would just
   raise "field ignored for this mode" warnings.
-- **TCP Fast Open**: per-listener `fast_open` checkbox, shown for `proto: tcp`
-  only (it's a hard config error on `udp`). Needs `net.ipv4.tcp_fastopen = 3` on
-  the host; if unset the router still starts and only warns (config.md §2.2).
+- **TCP Fast Open**, two independent switches (config.md §2.2, §3.4):
+  - *listener* `fast_open` — accept TFO from clients. `proto: tcp` only (a hard
+    config error on `udp`). Needs `net.ipv4.tcp_fastopen = 3` on the host; if
+    unset the router still starts and only warns.
+  - *backend* `fast_open` — use TFO when connecting **to** `servers`. Every mode
+    but `redirect_https` (which never connects to a backend).
+- **Accept queues** (config.md §2.3): per-listener `backlog` and
+  `fast_open_qlen`, both `tcp` only, both defaulting to 1024. `fast_open_qlen`
+  only shows (and only survives) when `fast_open` is on. Empty input = omit the
+  key: `0` is a hard error for both, so `setNum()` deletes rather than writing
+  `Number('') === 0`. Same helper backs the timeouts, where clearing a field used
+  to silently serialize an invalid `0`.
+- **`timeouts.keepalive`** (config.md §5.1, default 60, `0` = off) — the only
+  timeout where `0` is legal.
+- **HTTP/2 backend pooling** (config.md §3.9) has nothing to configure; the UI
+  just points at `sni_router_h2_pool_hits_total` when `http2` is ticked.
+- Needs **sni-router ≥ 1.6.0** — older builds reject `backlog` /
+  `fast_open_qlen` / backend `fast_open` as unknown fields.
 - **HTTP rules**: a per-rule *type* select with two zero/one-field presets —
   `301 → https/custom port` (sets `action:redirect status:301`, one `to` field:
   `https` for same-host:443, or a full URL for a custom port) and `404 Not Found`

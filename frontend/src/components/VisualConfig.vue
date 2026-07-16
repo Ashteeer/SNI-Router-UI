@@ -16,6 +16,7 @@ const uses = {
   proxy_protocol: (m) => m === 'passthrough' || m === 'terminate_tcp',
   balance: (m) => m !== 'redirect_https',
   health_check: (m) => m !== 'redirect_https',
+  fast_open: (m) => m !== 'redirect_https',
   tls: (m) => m === 'terminate' || m === 'terminate_tcp',
   backend_tls: (m) => m === 'terminate',
   headers: (m) => m === 'terminate',
@@ -28,16 +29,36 @@ function ensure(obj, key, val) {
   return obj[key]
 }
 
+// Optional ints (backlog, fast_open_qlen, timeouts) share one rule: an empty
+// field means "omit and take the router's default", never `0` — which is a hard
+// error for these (listen(0) accepts nothing; qlen 0 turns TFO off).
+// `keepalive: 0` is the one legitimate zero, and typing it still works.
+function setNum(obj, key, v) {
+  if (v === '' || v == null) delete obj[key]
+  else obj[key] = Number(v)
+}
+
 // listeners
 function addListener() {
   ensure(props.model, 'listeners', [])
   props.model.listeners.push({ name: 'listener', bind: [''], proto: 'tcp', routes: [] })
 }
 function delListener(i) { props.model.listeners.splice(i, 1) }
-// fast_open is tcp-only — on udp it's a hard config error, so drop it with the proto
+// backlog / fast_open / fast_open_qlen are tcp-only: fast_open on udp is a hard
+// error, the other two earn "ignored" warnings. Drop all three with the proto.
 function setProto(l, p) {
   l.proto = p
-  if (p !== 'tcp') delete l.fast_open
+  if (p !== 'tcp') { delete l.fast_open; delete l.fast_open_qlen; delete l.backlog }
+}
+// fast_open_qlen without fast_open is a warning — untick clears it too.
+function setFastOpen(l, on) {
+  if (on) l.fast_open = true
+  else { delete l.fast_open; delete l.fast_open_qlen }
+}
+// Off == absent for a default-false bool: keep it out of the YAML entirely.
+function setFlag(obj, key, on) {
+  if (on) obj[key] = true
+  else delete obj[key]
 }
 function addBind(l) { l.bind.push('') }
 function addRoute(l) { ensure(l, 'routes', []).push({ sni: '*', backend: backendNames()[0] || '' }) }
@@ -156,19 +177,45 @@ function dropOn(kind, to, key = null) {
           </div>
         </div>
 
-        <!-- fast_open (TFO) — tcp only -->
-        <div v-if="(l.proto || 'tcp') === 'tcp'" class="mb-3">
-          <label class="flex items-center gap-2 text-sm text-slate-300">
-            <input :id="'tfo' + li" type="checkbox" :checked="!!l.fast_open"
-                   @change="l.fast_open = $event.target.checked" />
-            TCP Fast Open
-          </label>
-          <p class="mt-1 text-xs text-slate-500">
-            Lets a returning client send its ClientHello inside the SYN, saving one RTT.
-            Needs <code>net.ipv4.tcp_fastopen = 3</code> on the host — otherwise the router
-            still starts, TFO just stays inactive. Changing this restarts the listener.
-          </p>
-        </div>
+        <!-- accept queues + fast_open (TFO) — tcp only -->
+        <template v-if="(l.proto || 'tcp') === 'tcp'">
+          <div class="mb-3">
+            <label class="label">Backlog (accept queue)</label>
+            <input :value="l.backlog" type="number" min="1" class="input" placeholder="1024 (default)"
+                   @input="setNum(l, 'backlog', $event.target.value)" />
+            <p class="mt-1 text-xs text-slate-500">
+              Connections whose handshake finished, waiting to be accepted. Leave empty for the
+              default — it's sized for a reconnect burst. On overflow the kernel <b>drops SYNs</b>,
+              so raise this one first if <code>nstat -az TcpExtListenOverflows</code> climbs.
+              Clamped by <code>net.core.somaxconn</code>.
+            </p>
+          </div>
+
+          <div class="mb-3">
+            <label class="flex items-center gap-2 text-sm text-slate-300">
+              <input :id="'tfo' + li" type="checkbox" :checked="!!l.fast_open"
+                     @change="setFastOpen(l, $event.target.checked)" />
+              TCP Fast Open (accept client TFO)
+            </label>
+            <p class="mt-1 text-xs text-slate-500">
+              Lets a returning client send its ClientHello inside the SYN, saving one RTT.
+              Needs <code>net.ipv4.tcp_fastopen = 3</code> on the host — otherwise the router
+              still starts, TFO just stays inactive. Changing this restarts the listener.
+            </p>
+          </div>
+
+          <div v-if="l.fast_open" class="mb-3 pl-6">
+            <label class="label">fast_open_qlen (pending-SYN queue)</label>
+            <input :value="l.fast_open_qlen" type="number" min="1" class="input" placeholder="1024 (default)"
+                   @input="setNum(l, 'fast_open_qlen', $event.target.value)" />
+            <p class="mt-1 text-xs text-slate-500">
+              TFO connections whose data arrived before the handshake finished. Separate from the
+              backlog. Overflow costs the client only a round trip (it falls back to a normal
+              handshake), so this is far less urgent to tune — watch
+              <code>nstat -az TcpExtTCPFastOpenListenOverflow</code>.
+            </p>
+          </div>
+        </template>
 
         <label class="label">Bind (IP:port)</label>
         <div v-for="(b, bi) in l.bind" :key="bi" class="mb-2 flex gap-2">
@@ -257,6 +304,26 @@ function dropOn(kind, to, key = null) {
         <div v-if="uses.http2(be.mode)" class="mt-2 flex items-center gap-2">
           <input :id="'h2' + name" v-model="be.http2" type="checkbox" />
           <label :for="'h2' + name" class="text-sm text-slate-300">HTTP/2 (h2)</label>
+        </div>
+        <p v-if="uses.http2(be.mode) && be.http2" class="mt-1 pl-6 text-xs text-slate-500">
+          Backend connections are pooled and reused, so a burst of h2 streams no longer means a
+          burst of connects — nothing to configure. Watch
+          <code>sni_router_h2_pool_hits_total</code> in <code>/metrics</code>. The backend is
+          spoken to as plaintext HTTP/1.1, so this can't be combined with <code>backend_tls</code>.
+        </p>
+
+        <div v-if="uses.fast_open(be.mode)" class="mt-2">
+          <label class="flex items-center gap-2 text-sm text-slate-300">
+            <input :id="'befo' + name" type="checkbox" :checked="!!be.fast_open"
+                   @change="setFlag(be, 'fast_open', $event.target.checked)" />
+            TCP Fast Open to servers
+          </label>
+          <p class="mt-1 pl-6 text-xs text-slate-500">
+            Saves one RTT when <b>connecting to</b> this backend's servers — separate from the
+            listener's TFO, which accepts it from clients. Only worth it when the server is a
+            <b>remote</b> hop (for <code>127.0.0.1</code> it buys nothing) <b>and</b> has TFO
+            enabled itself; otherwise the kernel quietly falls back to a normal handshake.
+          </p>
         </div>
 
         <!-- tls -->
@@ -352,12 +419,18 @@ function dropOn(kind, to, key = null) {
       <div class="card">
         <h3 class="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">Timeouts (s)</h3>
         <div class="grid grid-cols-2 gap-3">
-          <div v-for="k in ['handshake', 'connect', 'idle', 'health_interval', 'drain']" :key="k">
+          <div v-for="k in ['handshake', 'connect', 'idle', 'keepalive', 'health_interval', 'drain']" :key="k">
             <label class="label">{{ k }}</label>
-            <input :value="model.timeouts?.[k]" type="number" class="input"
-              @input="ensure(model, 'timeouts', {})[k] = Number($event.target.value)" />
+            <input :value="model.timeouts?.[k]" type="number" class="input" placeholder="default"
+              @input="setNum(ensure(model, 'timeouts', {}), k, $event.target.value)" />
           </div>
         </div>
+        <p class="mt-2 text-xs text-slate-500">
+          Empty = the router's default. <code>keepalive</code> (default 60) reaps connections whose
+          peer vanished without a FIN — a NAT rebind, a dead VPN client. It matters here because
+          passthrough splices in the kernel, so the router never sees the bytes and can't time them
+          out itself; <code>0</code> disables it.
+        </p>
       </div>
       <div class="card">
         <h3 class="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">Limits / Log / API</h3>
