@@ -88,7 +88,7 @@ onMounted(load)
 
 <template>
   <div class="max-w-2xl">
-    <h1 class="mb-5 text-xl font-semibold text-slate-100">Settings</h1>
+    <h1 class="mb-5 text-2xl font-semibold tracking-tight text-slate-100">Settings</h1>
 
     <!-- Admin login -->
     <div class="card mb-6">

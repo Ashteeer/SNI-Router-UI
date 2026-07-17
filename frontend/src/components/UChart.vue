@@ -24,11 +24,11 @@ function makeOpts(width) {
     padding: [12, 12, 0, 0],
     scales: { x: { time: true } },
     axes: [
-      { stroke: '#94a3b8', grid: { stroke: '#1e293b', width: 1 }, ticks: { stroke: '#334155' } },
+      { stroke: '#8b93a7', grid: { stroke: 'rgba(255,255,255,0.055)', width: 1 }, ticks: { stroke: 'rgba(255,255,255,0.12)' } },
       {
-        stroke: '#94a3b8',
-        grid: { stroke: '#1e293b', width: 1 },
-        ticks: { stroke: '#334155' },
+        stroke: '#8b93a7',
+        grid: { stroke: 'rgba(255,255,255,0.055)', width: 1 },
+        ticks: { stroke: 'rgba(255,255,255,0.12)' },
         size: 60,
         values: (u, vals) => vals.map((v) => props.yfmt(v)),
       },
@@ -83,8 +83,8 @@ watch(() => props.series, () => build())
 </script>
 
 <template>
-  <div class="card">
-    <div class="mb-2 text-sm font-semibold text-slate-300">{{ title }}</div>
+  <div class="card card-hover">
+    <div class="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">{{ title }}</div>
     <div ref="wrap"></div>
   </div>
 </template>

@@ -20,10 +20,10 @@ let liveTimer = null
 let histTimer = null
 
 const ranges = [
-  { id: '1h', label: '1 hour' },
-  { id: '6h', label: '6 hours' },
-  { id: '24h', label: '24 hours' },
-  { id: '48h', label: '2 days' },
+  { id: '1h', label: '1h' },
+  { id: '6h', label: '6h' },
+  { id: '24h', label: '24h' },
+  { id: '48h', label: '2d' },
 ]
 
 function fmtBytes(v, suffix = '') {
@@ -118,12 +118,12 @@ const hasData = computed(() => hist.value && hist.value.ts.length > 1)
 // Tiles from latest sample + live status
 const L = computed(() => live.value?.latest || {})
 const tiles = computed(() => [
-  { label: 'CPU', value: L.value.cpu_pct != null ? L.value.cpu_pct + ' %' : '—' },
-  { label: 'Memory', value: L.value.mem_total ? `${fmtBytes(L.value.mem_used)} / ${pct(L.value.mem_used, L.value.mem_total)}%` : '—' },
-  { label: 'Disk', value: L.value.disk_total ? `${fmtBytes(L.value.disk_used)} / ${pct(L.value.disk_used, L.value.disk_total)}%` : '—' },
-  { label: 'Active conns', value: L.value.conns_active ?? '—' },
-  { label: 'Uptime', value: fmtUptime(live.value?.status?.uptime_secs) },
-  { label: 'Version', value: live.value?.status?.version || '—' },
+  { label: 'CPU', value: L.value.cpu_pct != null ? L.value.cpu_pct + ' %' : '—', accent: '#818cf8' },
+  { label: 'Memory', value: L.value.mem_total ? `${fmtBytes(L.value.mem_used)} / ${pct(L.value.mem_used, L.value.mem_total)}%` : '—', accent: '#34d399' },
+  { label: 'Disk', value: L.value.disk_total ? `${fmtBytes(L.value.disk_used)} / ${pct(L.value.disk_used, L.value.disk_total)}%` : '—', accent: '#f59e0b' },
+  { label: 'Active conns', value: L.value.conns_active ?? '—', accent: '#a855f7' },
+  { label: 'Uptime', value: fmtUptime(live.value?.status?.uptime_secs), accent: '#22d3ee' },
+  { label: 'Version', value: live.value?.status?.version || '—', accent: '#f472b6' },
 ])
 
 watch(() => props.hostId, () => { hist.value = null; live.value = null; loadHistory(); loadLive(); loadAgent() })
@@ -139,34 +139,34 @@ onBeforeUnmount(() => { clearInterval(liveTimer); clearInterval(histTimer) })
 
 <template>
   <div>
-    <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
-      <h1 class="text-xl font-semibold text-slate-100">Dashboard</h1>
+    <div class="mb-6 flex flex-wrap items-center justify-between gap-3">
       <div class="flex items-center gap-3">
-        <span v-if="live" class="flex items-center gap-2 text-sm">
-          <span class="h-2.5 w-2.5 rounded-full" :class="live.reachable ? 'bg-emerald-500' : 'bg-red-500'"></span>
+        <h1 class="text-2xl font-semibold tracking-tight text-slate-100">Dashboard</h1>
+        <span v-if="live" class="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1 text-xs">
+          <span class="dot" :class="live.reachable ? 'dot-ok' : 'dot-bad'"></span>
           <span class="text-slate-400">{{ live.reachable ? 'reachable' : 'unreachable' }}</span>
         </span>
-        <select class="input w-auto" :value="hostId" @change="emit('update:hostId', Number($event.target.value))">
-          <option v-for="h in hosts" :key="h.id" :value="h.id">{{ h.name }}</option>
-        </select>
-        <div class="flex overflow-hidden rounded-lg border border-slate-700">
-          <button v-for="r in ranges" :key="r.id"
-            class="px-3 py-2 text-sm transition-colors"
-            :class="range === r.id ? 'bg-brand text-white' : 'bg-slate-900 text-slate-400 hover:bg-slate-800'"
-            @click="range = r.id">{{ r.label }}</button>
-        </div>
+      </div>
+      <div class="segment">
+        <button v-for="r in ranges" :key="r.id"
+          class="segment-btn" :class="{ 'segment-btn--active': range === r.id }"
+          @click="range = r.id">{{ r.label }}</button>
       </div>
     </div>
 
-    <p v-if="err" class="mb-4 rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-400">{{ err }}</p>
+    <p v-if="err" class="mb-4 rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-400">{{ err }}</p>
     <p v-if="!hosts.length" class="text-slate-500">No hosts. Add one in the Hosts tab.</p>
 
     <template v-else>
       <!-- Tiles -->
       <div class="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        <div v-for="t in tiles" :key="t.label" class="card">
-          <div class="label">{{ t.label }}</div>
-          <div class="text-lg font-semibold text-slate-100">{{ t.value }}</div>
+        <div v-for="t in tiles" :key="t.label" class="card card-hover overflow-hidden !p-0">
+          <div class="h-0.5 w-full" :style="{ background: `linear-gradient(90deg, ${t.accent}, transparent)` }"></div>
+          <div class="p-3.5">
+            <div class="label mb-1.5">{{ t.label }}</div>
+            <div v-if="!live" class="skeleton h-6 w-16"></div>
+            <div v-else class="tabular text-lg font-semibold text-slate-100">{{ t.value }}</div>
+          </div>
         </div>
       </div>
 
@@ -178,16 +178,16 @@ onBeforeUnmount(() => { clearInterval(liveTimer); clearInterval(histTimer) })
       <!-- Charts -->
       <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <UChart title="CPU usage" :data="cpuData"
-          :series="[{ label: 'CPU %', stroke: '#6366f1', fill: 'rgba(99,102,241,.15)' }]"
+          :series="[{ label: 'CPU %', stroke: '#818cf8', fill: 'rgba(129,140,248,.16)' }]"
           :yfmt="(v) => (v == null ? '—' : v + '%')" />
         <UChart title="Memory usage" :data="memData"
-          :series="[{ label: 'Mem %', stroke: '#10b981', fill: 'rgba(16,185,129,.15)' }]"
+          :series="[{ label: 'Mem %', stroke: '#34d399', fill: 'rgba(52,211,153,.16)' }]"
           :yfmt="(v) => (v == null ? '—' : v + '%')" />
         <UChart title="Network I/O" :data="netData"
-          :series="[{ label: 'In', stroke: '#38bdf8' }, { label: 'Out', stroke: '#f59e0b' }]"
+          :series="[{ label: 'In', stroke: '#22d3ee' }, { label: 'Out', stroke: '#f59e0b' }]"
           :yfmt="(v) => fmtBytes(v, '/s')" />
         <UChart title="Active connections" :data="connData"
-          :series="[{ label: 'Conns', stroke: '#a78bfa', fill: 'rgba(167,139,250,.15)' }]"
+          :series="[{ label: 'Conns', stroke: '#a855f7', fill: 'rgba(168,85,247,.16)' }]"
           :yfmt="(v) => (v == null ? '—' : v)" />
       </div>
 
@@ -195,56 +195,58 @@ onBeforeUnmount(() => { clearInterval(liveTimer); clearInterval(histTimer) })
       <div class="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div class="card">
           <div class="mb-3 flex items-center justify-between">
-            <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-400">Software version</h3>
-            <button class="text-xs text-slate-400 hover:text-slate-200 disabled:opacity-50"
+            <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-400">Software version</h3>
+            <button class="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-slate-400 transition-colors hover:bg-[var(--surface-2)] hover:text-slate-200 disabled:opacity-50"
               :disabled="checking" @click="checkNow" title="Re-check GitHub for the latest releases now">
-              {{ checking ? 'Checking…' : '↻ Check now' }}
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" :class="{ 'animate-spin': checking }"><path d="M23 4v6h-6M1 20v-6h6" /><path d="M3.5 9a9 9 0 0114.9-3.4L23 10M1 14l4.6 4.4A9 9 0 0020.5 15" /></svg>
+              {{ checking ? 'Checking…' : 'Check now' }}
             </button>
           </div>
-          <div class="flex items-center justify-between gap-3 border-b border-slate-800 py-2">
+          <div class="flex items-center justify-between gap-3 border-b border-[var(--border)] py-2.5">
             <div>
-              <div class="text-sm text-slate-300">Web UI</div>
+              <div class="text-sm font-medium text-slate-200">Web UI</div>
               <div class="text-xs text-slate-500">
                 installed {{ sys?.ui || '—' }}<span v-if="sys?.latest"> · latest {{ sys.latest }}</span>
               </div>
             </div>
-            <button v-if="sys?.update_available" class="btn-primary" :disabled="!!updating"
+            <button v-if="sys?.update_available" class="btn-primary !py-1.5" :disabled="!!updating"
               @click="doUpdateUi">{{ updating === 'ui' ? 'Updating…' : 'Update' }}</button>
-            <span v-else-if="sys" class="text-xs text-emerald-400">up to date</span>
+            <span v-else-if="sys" class="rounded-md bg-emerald-500/10 px-2 py-1 text-xs text-emerald-400">up to date</span>
           </div>
-          <div class="flex items-center justify-between gap-3 border-b border-slate-800 py-2">
+          <div class="flex items-center justify-between gap-3 border-b border-[var(--border)] py-2.5">
             <div>
-              <div class="text-sm text-slate-300">Agent (this host)</div>
+              <div class="text-sm font-medium text-slate-200">Agent (this host)</div>
               <div class="text-xs text-slate-500">
                 {{ agent?.version ? 'installed ' + agent.version : 'agent offline / not reporting' }}
                 <span v-if="agent?.version && sys?.latest"> · latest {{ sys.latest }}</span>
               </div>
             </div>
-            <button v-if="agentUpdate" class="btn-primary" :disabled="!!updating"
+            <button v-if="agentUpdate" class="btn-primary !py-1.5" :disabled="!!updating"
               @click="doUpdateAgent">{{ updating === 'agent' ? 'Updating…' : 'Update' }}</button>
-            <span v-else-if="agent?.version" class="text-xs text-emerald-400">up to date</span>
+            <span v-else-if="agent?.version" class="rounded-md bg-emerald-500/10 px-2 py-1 text-xs text-emerald-400">up to date</span>
           </div>
-          <div class="flex items-center justify-between gap-3 py-2">
+          <div class="flex items-center justify-between gap-3 py-2.5">
             <div>
-              <div class="text-sm text-slate-300">sni-router (this host)</div>
+              <div class="text-sm font-medium text-slate-200">sni-router (this host)</div>
               <div class="text-xs text-slate-500">
                 {{ routerVersion ? 'installed ' + routerVersion : 'router offline / no version' }}
                 <span v-if="sys?.router_latest"> · latest {{ sys.router_latest }}</span>
               </div>
             </div>
-            <button v-if="routerUpdate" class="btn-primary" :disabled="!!updating"
+            <button v-if="routerUpdate" class="btn-primary !py-1.5" :disabled="!!updating"
               @click="doUpdateRouter">{{ updating === 'router' ? 'Updating…' : 'Update' }}</button>
-            <span v-else-if="routerVersion" class="text-xs text-emerald-400">up to date</span>
+            <span v-else-if="routerVersion" class="rounded-md bg-emerald-500/10 px-2 py-1 text-xs text-emerald-400">up to date</span>
           </div>
-          <p v-if="updateMsg" class="mt-2 rounded-lg bg-brand/10 px-3 py-2 text-sm text-brand">{{ updateMsg }}</p>
+          <p v-if="updateMsg" class="mt-2 rounded-xl border border-[var(--accent-strong)]/20 bg-[var(--accent-strong)]/10 px-3 py-2 text-sm text-[var(--accent)]">{{ updateMsg }}</p>
         </div>
 
         <div class="card">
-          <h3 class="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
+          <h3 class="mb-3 text-sm font-semibold uppercase tracking-wider text-slate-400">
             IP addresses available on this server
           </h3>
-          <div v-if="agent?.ips?.length" class="flex flex-wrap gap-x-4 gap-y-1 font-mono text-sm text-slate-300">
-            <span v-for="c in agent.ips" :key="c">{{ cidrRange(c) }}</span>
+          <div v-if="agent?.ips?.length" class="flex flex-wrap gap-2">
+            <span v-for="c in agent.ips" :key="c"
+              class="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1 font-mono text-sm text-slate-300">{{ cidrRange(c) }}</span>
           </div>
           <p v-else class="text-sm text-slate-500">No agent data — install/enable the metrics agent on this host.</p>
         </div>

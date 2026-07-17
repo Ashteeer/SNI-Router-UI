@@ -47,5 +47,5 @@ watch(() => props.modelValue, (val) => {
 </script>
 
 <template>
-  <div ref="host" class="h-full overflow-auto rounded-lg border border-slate-800 text-sm"></div>
+  <div ref="host" class="h-full overflow-auto rounded-xl border border-[var(--border)] text-sm"></div>
 </template>

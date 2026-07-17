@@ -73,6 +73,34 @@ stdlib script reading `/proc` — one per managed host.
 - **Frontend:** Vue 3 + Vite + Tailwind, uPlot (charts), CodeMirror 6 (editor),
   js-yaml (visual↔manual sync).
 
+### UI design system (v1.11.0 redesign)
+
+Dark-only **glassmorphism**: frosted `backdrop-blur` surfaces over an aurora
+gradient body, one indigo→violet accent, soft glows. **All visual tokens are CSS
+variables** in [`style.css`](frontend/src/style.css) (`--surface`, `--border`,
+`--accent`, `--glow`, `--radius`, …) — retune the whole look in one place. Reusable
+component classes (`.card` / `.card-hover`, `.btn-*`, `.input`, `.label`,
+`.segment`/`.segment-btn`, `.nav-link`, `.dot`/`.dot-ok|bad|wait`, `.skeleton`)
+back every screen; templates mostly compose these, so restyling is central.
+
+- **Navigation:** sticky top navbar (brand + tab links + **global host switcher**
+  shown on host-scoped tabs + logout) with a `md:hidden` **fixed bottom tab bar**
+  on phones. No sidebar. The host switcher lives in `App.vue`, so Dashboard/Configs
+  no longer carry their own host `<select>`.
+- **Responsive:** everything reflows to ≤375px with no horizontal scroll. The
+  Hosts table is desktop-only (`hidden md:block`); phones get a stacked **card
+  list** (`md:hidden`) with the same data. Modals are `max-h`/scroll-safe.
+- **Transitions/motion:** tab changes crossfade via a `<Transition name="view">`
+  whose enter/leave share **one grid cell** (`grid-area:1/1`) — deliberately *not*
+  `mode="out-in"`, so the incoming view mounts immediately and a stalled/paused
+  transition (e.g. a backgrounded tab where `requestAnimationFrame` is frozen) can
+  never leave the screen blank. Modals fade+scale (`<Transition name="modal">`),
+  status dots pulse, tiles show `.skeleton` shimmers until live data lands.
+- **Caveat:** view roots must **not** carry a CSS `animation` (e.g. a fade-in
+  class) — Vue's `<Transition>` auto-detects it and waits for an `animationend`
+  that never fires on leave, deadlocking the transition. Let the view transition
+  own the entrance instead.
+
 ## Layout
 
 ```
@@ -87,7 +115,7 @@ backend/provision.py           SSH orchestration: install agent / sni-router
 backend/ui.conf.example        site local config (host/port/db)
 scripts/install-agent.sh       agent installer (-v, -a IP:PORT, -t token)
 scripts/install-site.sh        site installer (-v, -s IP:PORT)
-frontend/src/App.vue           auth gate + sidebar + tab routing
+frontend/src/App.vue           auth gate + top navbar / mobile bottom-tabs + global host switcher + view transitions
 frontend/src/views/            Login, Dashboard, Hosts, Configs, Settings
 frontend/src/components/       UChart (uPlot), Editor (CodeMirror), VisualConfig
 config.md                      sni-router config reference (schema source)
@@ -183,9 +211,15 @@ so even a read-only-admin build works.
 - [x] End-to-end tested on Ubuntu 24.04: dashboard/metrics/hosts/config-read
   against a live sni-router; config save/validation-errors/restart against a
   router that implements the documented write API.
+- [x] **v1.11.0 UI redesign** built (`vite build`, clean) and sandbox-tested on
+  the german box in an isolated instance (own dir/port/DB, prod untouched): all
+  four views render, glass tokens applied, tab transitions + modals work, host
+  row/status dots bind live, mobile (375px) has no horizontal scroll and shows
+  the bottom tab bar + card list. Pixel screenshots weren't captured (headless
+  pane freezes rAF/paint) — verified via DOM + computed styles instead.
 - [ ] **Not yet end-to-end tested:** installers (`scripts/*.sh`), local config
-  editing (Settings), and SSH remote provisioning. Frontend not rebuilt since
-  these UI additions — run `npm run build` before shipping.
+  editing (Settings), and SSH remote provisioning. Rebuild the frontend
+  (`npm run build`) before shipping — the git tarball carries no `dist/`.
 - Visual configurator covers listeners, backends (mode-aware), timeouts, limits,
   log, api. Anything it doesn't surface is always editable in Manual.
 - **Mode/proto switches prune inapplicable fields.** Changing a backend's `mode`

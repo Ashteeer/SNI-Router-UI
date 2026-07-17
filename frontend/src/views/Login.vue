@@ -33,10 +33,11 @@ async function submit() {
 
 <template>
   <div class="grid h-full place-items-center p-6">
-    <form class="card w-full max-w-sm" @submit.prevent="submit">
-      <div class="mb-1 flex items-center gap-2">
-        <div class="grid h-9 w-9 place-items-center rounded-lg bg-brand font-bold text-white">S</div>
-        <h1 class="text-lg font-semibold text-slate-100">SNI-Router UI</h1>
+    <form class="card w-full max-w-sm animate-fade-up" @submit.prevent="submit">
+      <div class="mb-1 flex items-center gap-2.5">
+        <div class="grid h-10 w-10 place-items-center rounded-xl font-bold text-white shadow-lg"
+             style="background: linear-gradient(135deg, var(--accent-strong), var(--accent-2)); box-shadow: 0 8px 20px -8px var(--glow)">S</div>
+        <h1 class="text-lg font-semibold tracking-tight text-slate-100">SNI-Router UI</h1>
       </div>
       <p class="mb-5 text-sm text-slate-400">
         {{ mode === 'setup' ? 'Create the admin account to get started.' : 'Sign in to continue.' }}

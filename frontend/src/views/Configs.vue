@@ -121,48 +121,44 @@ const currentHost = () => props.hosts.find((h) => h.id === props.hostId)
 
 <template>
   <div>
-    <div v-if="ips.length" class="card mb-4 py-3">
-      <div class="label mb-1">IP addresses available on this server</div>
-      <div class="flex flex-wrap gap-x-4 gap-y-1 font-mono text-sm text-slate-300">
-        <span v-for="c in ips" :key="c">{{ cidrRange(c) }}</span>
+    <div v-if="ips.length" class="card mb-4 !py-3">
+      <div class="label mb-1.5">IP addresses available on this server</div>
+      <div class="flex flex-wrap gap-2">
+        <span v-for="c in ips" :key="c"
+          class="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1 font-mono text-sm text-slate-300">{{ cidrRange(c) }}</span>
       </div>
     </div>
 
     <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
       <div class="flex items-center gap-3">
-        <select class="input w-auto" :value="hostId"
-          @change="emit('update:hostId', Number($event.target.value))">
-          <option v-for="h in hosts" :key="h.id" :value="h.id">{{ h.name }}</option>
-        </select>
-        <div class="flex overflow-hidden rounded-lg border border-slate-700">
-          <button class="px-3 py-2 text-sm"
-            :class="subtab === 'visual' ? 'bg-brand text-white' : 'bg-slate-900 text-slate-400 hover:bg-slate-800'"
+        <h1 class="text-2xl font-semibold tracking-tight text-slate-100">Config</h1>
+        <div class="segment">
+          <button class="segment-btn" :class="{ 'segment-btn--active': subtab === 'visual' }"
             @click="subtab = 'visual'">Visual</button>
-          <button class="px-3 py-2 text-sm"
-            :class="subtab === 'manual' ? 'bg-brand text-white' : 'bg-slate-900 text-slate-400 hover:bg-slate-800'"
+          <button class="segment-btn" :class="{ 'segment-btn--active': subtab === 'manual' }"
             @click="subtab = 'manual'">Manual</button>
         </div>
       </div>
-      <div class="flex items-center gap-2">
+      <div class="flex flex-1 items-center justify-end gap-2 sm:flex-none">
         <button class="btn-ghost" :disabled="!!busy" @click="load">Reload</button>
         <button class="btn-primary" :disabled="busy || !!parseErr" @click="save">
           {{ busy === 'save' ? 'Saving…' : 'Save' }}
         </button>
         <button class="btn-danger" :disabled="busy || !currentHost()?.has_token" @click="restart"
           :title="currentHost()?.has_token ? '' : 'Needs an API token'">
-          {{ busy === 'restart' ? 'Restarting…' : 'Restart Service' }}
+          {{ busy === 'restart' ? 'Restarting…' : 'Restart' }}
         </button>
       </div>
     </div>
 
-    <p v-if="loadErr" class="mb-4 rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-400">{{ loadErr }}</p>
-    <p v-if="parseErr" class="mb-4 rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-400">
+    <p v-if="loadErr" class="mb-4 rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-400">{{ loadErr }}</p>
+    <p v-if="parseErr" class="mb-4 rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-sm text-amber-400">
       YAML parse error: {{ parseErr }} — the visual view is paused until it's valid.
     </p>
 
     <!-- Save/restart result -->
-    <div v-if="result" class="mb-4 rounded-lg px-3 py-2 text-sm"
-         :class="result.ok ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'">
+    <div v-if="result" class="mb-4 rounded-xl border px-3 py-2 text-sm"
+         :class="result.ok ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-400' : 'border-red-500/20 bg-red-500/10 text-red-400'">
       <template v-if="result.ok">
         Applied: <b>{{ result.applied || 'ok' }}</b>
         <span v-if="result.downtime !== undefined"> · downtime: {{ result.downtime }}</span>

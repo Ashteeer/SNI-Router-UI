@@ -46,11 +46,7 @@ function fillAgentIp() {
 const routerEndpoint = (h) => `${h.ip}:${h.port}`
 const agentEndpoint = (h) => `${h.agent_ip || h.ip}:${h.agent_port}`
 function dotClass(state) {
-  return {
-    'bg-emerald-500': state === 'online',
-    'bg-red-500': state === 'offline',
-    'bg-slate-500 animate-pulse': state === 'checking' || !state,
-  }
+  return state === 'online' ? 'dot-ok' : state === 'offline' ? 'dot-bad' : 'dot-wait'
 }
 
 async function discoverLocal() {
@@ -204,55 +200,63 @@ onMounted(pingAll)
 
 <template>
   <div>
-    <div class="mb-5 flex items-center justify-between">
-      <h1 class="text-xl font-semibold text-slate-100">Hosts</h1>
-      <div class="flex gap-2">
+    <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
+      <h1 class="text-2xl font-semibold tracking-tight text-slate-100">Hosts</h1>
+      <div class="flex flex-wrap gap-2">
         <button class="btn-danger" :disabled="!checked.size" @click="removeChecked">
-          Delete selected ({{ checked.size }})
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2m-9 0v14a2 2 0 002 2h6a2 2 0 002-2V6" /></svg>
+          <span class="hidden sm:inline">Delete selected</span> ({{ checked.size }})
         </button>
-        <button class="btn-ghost" @click="openInstall">⇩ Remote install</button>
-        <button class="btn-primary" @click="openAdd">+ Add Host</button>
+        <button class="btn-ghost" @click="openInstall">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" /></svg>
+          Remote install
+        </button>
+        <button class="btn-primary" @click="openAdd">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14" /></svg>
+          Add Host
+        </button>
       </div>
     </div>
 
-    <div class="card overflow-x-auto p-0">
+    <!-- Desktop table -->
+    <div class="card hidden overflow-hidden !p-0 md:block">
       <table class="w-full text-sm">
-        <thead class="border-b border-slate-800 text-left text-slate-400">
+        <thead class="border-b border-[var(--border)] text-left text-slate-400">
           <tr>
-            <th class="w-10 p-3"><input type="checkbox" @change="toggleAll" /></th>
-            <th class="p-3">Name</th>
-            <th class="p-3">sni-router API</th>
-            <th class="p-3">Metrics agent</th>
-            <th class="w-16 p-3"></th>
+            <th class="w-10 p-3.5"><input type="checkbox" class="accent-[var(--accent-strong)]" @change="toggleAll" /></th>
+            <th class="p-3.5 font-medium">Name</th>
+            <th class="p-3.5 font-medium">sni-router API</th>
+            <th class="p-3.5 font-medium">Metrics agent</th>
+            <th class="w-20 p-3.5"></th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="h in hosts" :key="h.id" class="border-b border-slate-800/60 hover:bg-slate-800/30">
-            <td class="p-3"><input type="checkbox" :checked="checked.has(h.id)" @change="toggle(h.id)" /></td>
-            <td class="p-3 font-medium text-slate-200">{{ h.name }}</td>
-            <td class="p-3">
+          <tr v-for="h in hosts" :key="h.id" class="border-b border-[var(--border)] transition-colors last:border-0 hover:bg-[var(--surface)]">
+            <td class="p-3.5"><input type="checkbox" class="accent-[var(--accent-strong)]" :checked="checked.has(h.id)" @change="toggle(h.id)" /></td>
+            <td class="p-3.5 font-medium text-slate-200">{{ h.name }}</td>
+            <td class="p-3.5">
               <div class="font-mono text-xs text-slate-400">{{ routerEndpoint(h) }}</div>
-              <span class="mt-1 inline-flex items-center gap-2">
-                <span class="h-2.5 w-2.5 rounded-full" :class="dotClass(status[h.id])"></span>
+              <span class="mt-1.5 inline-flex items-center gap-2">
+                <span class="dot" :class="dotClass(status[h.id])"></span>
                 <span class="text-xs text-slate-400">{{ status[h.id] || 'checking' }}</span>
               </span>
             </td>
-            <td class="p-3">
+            <td class="p-3.5">
               <div class="font-mono text-xs text-slate-400">{{ agentEndpoint(h) }}</div>
-              <span class="mt-1 inline-flex items-center gap-2">
-                <span class="h-2.5 w-2.5 rounded-full" :class="dotClass(agentStatus[h.id])"></span>
+              <span class="mt-1.5 inline-flex items-center gap-2">
+                <span class="dot" :class="dotClass(agentStatus[h.id])"></span>
                 <span class="text-xs text-slate-400">{{ agentStatus[h.id] || 'checking' }}</span>
               </span>
             </td>
-            <td class="p-3">
-              <div class="flex items-center gap-3">
-                <button class="text-slate-400 hover:text-slate-200" title="Edit" @click="openEdit(h)">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <td class="p-3.5">
+              <div class="flex items-center gap-1">
+                <button class="grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition-colors hover:bg-[var(--surface-2)] hover:text-slate-100" title="Edit" @click="openEdit(h)">
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M12 20h9M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4 12.5-12.5z" />
                   </svg>
                 </button>
-                <button class="text-red-500 hover:text-red-400" title="Delete" @click="removeOne(h.id)">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <button class="grid h-8 w-8 place-items-center rounded-lg text-red-500 transition-colors hover:bg-red-500/10 hover:text-red-400" title="Delete" @click="removeOne(h.id)">
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M3 6h18M8 6V4h8v2m-9 0v14a2 2 0 002 2h6a2 2 0 002-2V6M10 11v6M14 11v6" />
                   </svg>
                 </button>
@@ -266,10 +270,50 @@ onMounted(pingAll)
       </table>
     </div>
 
+    <!-- Mobile card list -->
+    <div class="space-y-3 md:hidden">
+      <div v-for="h in hosts" :key="h.id" class="card card-hover">
+        <div class="mb-3 flex items-start justify-between gap-2">
+          <label class="flex items-center gap-2.5">
+            <input type="checkbox" class="accent-[var(--accent-strong)]" :checked="checked.has(h.id)" @change="toggle(h.id)" />
+            <span class="font-semibold text-slate-100">{{ h.name }}</span>
+          </label>
+          <div class="flex items-center gap-1">
+            <button class="grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-[var(--surface-2)] hover:text-slate-100" title="Edit" @click="openEdit(h)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4 12.5-12.5z" /></svg>
+            </button>
+            <button class="grid h-8 w-8 place-items-center rounded-lg text-red-500 hover:bg-red-500/10 hover:text-red-400" title="Delete" @click="removeOne(h.id)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2m-9 0v14a2 2 0 002 2h6a2 2 0 002-2V6" /></svg>
+            </button>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <div class="label mb-1">sni-router API</div>
+            <div class="font-mono text-xs text-slate-400">{{ routerEndpoint(h) }}</div>
+            <span class="mt-1.5 inline-flex items-center gap-2">
+              <span class="dot" :class="dotClass(status[h.id])"></span>
+              <span class="text-xs text-slate-400">{{ status[h.id] || 'checking' }}</span>
+            </span>
+          </div>
+          <div>
+            <div class="label mb-1">Metrics agent</div>
+            <div class="font-mono text-xs text-slate-400">{{ agentEndpoint(h) }}</div>
+            <span class="mt-1.5 inline-flex items-center gap-2">
+              <span class="dot" :class="dotClass(agentStatus[h.id])"></span>
+              <span class="text-xs text-slate-400">{{ agentStatus[h.id] || 'checking' }}</span>
+            </span>
+          </div>
+        </div>
+      </div>
+      <div v-if="!hosts.length" class="card p-8 text-center text-slate-500">No hosts yet. Add one to start.</div>
+    </div>
+
     <!-- Add / Edit modal -->
-    <div v-if="showAdd" class="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4"
+    <Transition name="modal">
+    <div v-if="showAdd" class="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4 backdrop-blur-sm"
          @click.self="closeModal">
-      <div class="card w-full max-w-md">
+      <div class="card max-h-[92vh] w-full max-w-md overflow-y-auto">
         <div class="mb-4 flex items-center justify-between">
           <h2 class="text-lg font-semibold text-slate-100">{{ editId != null ? 'Edit Host' : 'Add Host' }}</h2>
           <button class="text-slate-400 hover:text-slate-200" @click="closeModal">
@@ -320,11 +364,13 @@ onMounted(pingAll)
         </form>
       </div>
     </div>
+    </Transition>
 
     <!-- Remote install modal -->
-    <div v-if="showInstall" class="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4"
+    <Transition name="modal">
+    <div v-if="showInstall" class="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4 backdrop-blur-sm"
          @click.self="showInstall = false">
-      <div class="card max-h-[90vh] w-full max-w-lg overflow-y-auto">
+      <div class="card max-h-[92vh] w-full max-w-lg overflow-y-auto">
         <div class="mb-4 flex items-center justify-between">
           <h2 class="text-lg font-semibold text-slate-100">Remote install (SSH)</h2>
           <button class="text-slate-400 hover:text-slate-200" @click="showInstall = false">✕</button>
@@ -356,12 +402,12 @@ onMounted(pingAll)
             <input v-model="inst.ssh.user" class="input mb-3" placeholder="root" />
 
             <label class="label">Authentication</label>
-            <div class="mb-2 flex gap-2">
-              <button type="button" class="flex-1 rounded-lg px-3 py-2 text-sm"
-                :class="inst.ssh.authMethod === 'password' ? 'bg-brand text-white' : 'bg-slate-800 text-slate-300'"
+            <div class="segment mb-2 w-full">
+              <button type="button" class="segment-btn flex-1 text-center"
+                :class="{ 'segment-btn--active': inst.ssh.authMethod === 'password' }"
                 @click="inst.ssh.authMethod = 'password'">Password</button>
-              <button type="button" class="flex-1 rounded-lg px-3 py-2 text-sm"
-                :class="inst.ssh.authMethod === 'key' ? 'bg-brand text-white' : 'bg-slate-800 text-slate-300'"
+              <button type="button" class="segment-btn flex-1 text-center"
+                :class="{ 'segment-btn--active': inst.ssh.authMethod === 'key' }"
                 @click="inst.ssh.authMethod = 'key'">Private key</button>
             </div>
             <PasswordInput v-if="inst.ssh.authMethod === 'password'" v-model="inst.ssh.password"
@@ -386,12 +432,12 @@ onMounted(pingAll)
             <input v-model="inst.version" class="input mb-4" placeholder="latest" />
 
             <!-- new connection vs update existing -->
-            <div class="mb-3 flex overflow-hidden rounded-lg border border-slate-700">
-              <button type="button" class="flex-1 px-3 py-2 text-sm"
-                :class="inst.mode === 'new' ? 'bg-brand text-white' : 'bg-slate-900 text-slate-400 hover:bg-slate-800'"
+            <div class="segment mb-3 w-full">
+              <button type="button" class="segment-btn flex-1 text-center"
+                :class="{ 'segment-btn--active': inst.mode === 'new' }"
                 @click="inst.mode = 'new'; inst.host_id = null">Create new connection</button>
-              <button type="button" class="flex-1 px-3 py-2 text-sm"
-                :class="inst.mode === 'update' ? 'bg-brand text-white' : 'bg-slate-900 text-slate-400 hover:bg-slate-800'"
+              <button type="button" class="segment-btn flex-1 text-center"
+                :class="{ 'segment-btn--active': inst.mode === 'update' }"
                 @click="inst.mode = 'update'">Update existing</button>
             </div>
             <div v-if="inst.mode === 'new'" class="mb-3">
@@ -444,5 +490,6 @@ onMounted(pingAll)
         </template>
       </div>
     </div>
+    </Transition>
   </div>
 </template>
