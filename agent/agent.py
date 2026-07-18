@@ -31,7 +31,7 @@ import sys
 import time
 import urllib.parse
 
-AGENT_VERSION = "1.11.2"
+AGENT_VERSION = "1.11.3"
 CONF_PATH = os.environ.get("SNI_AGENT_CONF", "/etc/sni-router-agent/agent.conf")
 
 
@@ -193,6 +193,34 @@ def cert_info(path):
             "days_left": days, "subject_cn": cn}
 
 
+# kernel TcpExt counters the UI surfaces for accept-queue / TFO health (config.md)
+NETSTAT_KEYS = (
+    "ListenOverflows", "ListenDrops",
+    "TCPFastOpenPassive", "TCPFastOpenPassiveFail", "TCPFastOpenListenOverflow",
+)
+
+
+def net_counters():
+    """Curated TcpExt counters from /proc/net/netstat (host-wide, cumulative).
+    ListenOverflows/Drops = accept-queue overflow; the TCPFastOpen* ones are the
+    TFO queue's health. ponytail: stdlib file read, no nstat subprocess."""
+    out = {}
+    try:
+        with open("/proc/net/netstat") as f:
+            lines = f.readlines()
+        for i in range(len(lines) - 1):
+            if lines[i].startswith("TcpExt:") and lines[i + 1].startswith("TcpExt:"):
+                hdr, val = lines[i].split()[1:], lines[i + 1].split()[1:]
+                d = dict(zip(hdr, val))
+                for k in NETSTAT_KEYS:
+                    if k in d:
+                        out[k] = int(d[k])
+                break
+    except Exception:
+        pass
+    return out
+
+
 TFO_SYSCTL = "/proc/sys/net/ipv4/tcp_fastopen"
 
 
@@ -270,6 +298,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if parsed.path == "/tfo":
             try:
                 self._json(200, tfo_status())
+            except Exception as e:  # noqa: BLE001
+                self._json(500, {"error": str(e)})
+            return
+        if parsed.path == "/netstat":
+            try:
+                self._json(200, net_counters())
             except Exception as e:  # noqa: BLE001
                 self._json(500, {"error": str(e)})
             return

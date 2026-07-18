@@ -52,6 +52,7 @@ export const api = {
   certCheck: (id, path) => req('GET', `/hosts/${id}/certcheck?path=${encodeURIComponent(path)}`),
   tfoStatus: (id) => req('GET', `/hosts/${id}/tfo`),
   tfoEnable: (id) => req('POST', `/hosts/${id}/tfo`),
+  netstat: (id) => req('GET', `/hosts/${id}/netstat`),
   updateAgent: (id) => req('POST', `/hosts/${id}/agent-update`),
   updateRouter: (id) => req('POST', `/hosts/${id}/update`),
 

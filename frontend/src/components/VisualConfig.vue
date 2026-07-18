@@ -100,6 +100,17 @@ function showToast(msg, ok = true) {
 // check the host's TFO sysctl once a config with an enabled listener TFO loads
 watch(() => (props.model?.listeners || []).some((l) => l.fast_open),
   (has) => { if (has && tfo.value == null) checkTfo() }, { immediate: true })
+
+// --- light observability: host kernel counters for accept-queue / TFO (#7) ---
+const counters = ref(null) // { ListenOverflows, ListenDrops, TCPFastOpen*... } | null
+async function checkCounters() {
+  if (!props.hostId) return
+  try { counters.value = await api.netstat(props.hostId) }
+  catch { counters.value = null } // agent down — just hide the indicators
+}
+function obsClass(n) { return (n || 0) > 0 ? 'text-amber-400' : 'text-emerald-400' }
+watch(() => (props.model?.listeners || []).length > 0,
+  (has) => { if (has && counters.value == null) checkCounters() }, { immediate: true })
 // Off == absent for a default-false bool: keep it out of the YAML entirely.
 function setFlag(obj, key, on) {
   if (on) obj[key] = true
@@ -353,6 +364,11 @@ onBeforeUnmount(() => {
                 so raise this one first if <code>nstat -az TcpExtListenOverflows</code> climbs.
                 Clamped by <code>net.core.somaxconn</code>.
               </p>
+              <p v-if="counters" class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+                <span :class="obsClass(counters.ListenOverflows)">● accept-queue overflows: {{ counters.ListenOverflows ?? 0 }}</span>
+                <span class="text-slate-600">host-wide — raise backlog if this climbs</span>
+                <button type="button" class="text-slate-500 hover:text-slate-300" @click="checkCounters" title="Refresh counters">↻</button>
+              </p>
             </div>
 
             <div class="mb-3">
@@ -392,6 +408,11 @@ onBeforeUnmount(() => {
                 backlog. Overflow costs the client only a round trip (it falls back to a normal
                 handshake), so this is far less urgent to tune — watch
                 <code>nstat -az TcpExtTCPFastOpenListenOverflow</code>.
+              </p>
+              <p v-if="counters" class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs">
+                <span :class="obsClass(counters.TCPFastOpenListenOverflow)">● TFO queue overflows: {{ counters.TCPFastOpenListenOverflow ?? 0 }}</span>
+                <span v-if="counters.TCPFastOpenPassive != null" class="text-emerald-400">accepted: {{ counters.TCPFastOpenPassive }}</span>
+                <span v-if="counters.TCPFastOpenPassiveFail" class="text-amber-400">failed: {{ counters.TCPFastOpenPassiveFail }}</span>
               </p>
             </div>
           </template>

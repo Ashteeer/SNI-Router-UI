@@ -169,7 +169,7 @@ systemd units: `backend/sni-router-ui.service`, `agent/sni-router-agent.service`
 | `GET /version` (`?force=1` skips 1h cache) · `POST /update/ui` | UI+router latest-check · self-update |
 | `POST /provision` | clean-install agent/router over SSH (`targets`, opt. `host_id`) |
 | `GET /hosts` · `POST /hosts` · `PUT /hosts/{id}` · `DELETE /hosts/{id}` · `POST /hosts/delete` | host CRUD (PUT = edit; incl. `agent_ip`) |
-| `GET /hosts/{id}/status` · `/live` · `/history?range=1h\|6h\|24h\|48h` · `/agent` · `/certcheck?path=` · `/tfo` | metrics · agent `/sys` (IPs+version) · TLS cert/key check · host TFO sysctl status, all via the agent |
+| `GET /hosts/{id}/status` · `/live` · `/history?range=1h\|6h\|24h\|48h` · `/agent` · `/certcheck?path=` · `/tfo` · `/netstat` | metrics · agent `/sys` (IPs+version) · TLS cert/key check · host TFO sysctl status · curated kernel TcpExt counters, all via the agent |
 | `POST /hosts/{id}/tfo` | ask the agent to enable `net.ipv4.tcp_fastopen = 3` on the host |
 | `GET/PUT /hosts/{id}/config` · `POST /hosts/{id}/reload\|restart\|update\|agent-update` | config control · router self-update (proxies router `POST /update`) · agent self-update |
 
@@ -242,6 +242,11 @@ so even a read-only-admin build works.
     (`POST /tfo` → agent writes the sysctl + persists it) and toasts success.
   - *backend* `fast_open` — use TFO when connecting **to** `servers`. Every mode
     but `redirect_https` (which never connects to a backend).
+- **Light observability** (agent `GET /netstat`): the Visual config shows host-wide
+  kernel `TcpExt` counters inline next to the fields they relate to — accept-queue
+  overflows (`ListenOverflows`) under **backlog**, and TFO queue overflows +
+  accepted/failed under **fast_open_qlen** — green at 0, amber when climbing, with a
+  ↻ refresh. Snapshot only (no history); the agent reads `/proc/net/netstat`.
 - **Accept queues** (config.md §2.3): per-listener `backlog` and
   `fast_open_qlen`, both `tcp` only, both defaulting to 1024. `fast_open_qlen`
   only shows (and only survives) when `fast_open` is on. Empty input = omit the

@@ -140,6 +140,16 @@ async def tfo_enable(host):
         return r.json()
 
 
+async def net_counters(host):
+    """Curated kernel TcpExt counters via the agent (accept-queue / TFO health)."""
+    port = host.get("agent_port") or 9110
+    url = f"http://{_agent_ip(host)}:{port}/netstat"
+    async with httpx.AsyncClient(timeout=8) as cl:
+        r = await cl.get(url, headers=_agent_headers(host))
+        r.raise_for_status()
+        return r.json()
+
+
 async def poll_host(host):
     values = {"up": 0}
     # /metrics is served on the unified api bind (same port + token as admin).

@@ -501,6 +501,15 @@ async def host_tfo_enable(host_id: int, user=Depends(require_auth)):
         raise HTTPException(status_code=502, detail=f"agent unreachable: {e}")
 
 
+@app.get("/api/hosts/{host_id}/netstat")
+async def host_netstat(host_id: int, user=Depends(require_auth)):
+    host = require_host(host_id)
+    try:
+        return await collector.net_counters(host)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"agent unreachable: {e}")
+
+
 # declared before the {action} catch-all so it isn't swallowed as an "action"
 @app.post("/api/hosts/{host_id}/agent-update")
 async def host_agent_update(host_id: int, user=Depends(require_auth)):
