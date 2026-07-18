@@ -46,6 +46,8 @@ const showHostSwitcher = computed(() => tab.value === 'dashboard' || tab.value =
 </script>
 
 <template>
+  <div class="aurora" aria-hidden="true"></div>
+
   <div v-if="authState === 'loading'" class="grid h-full place-items-center text-slate-500">
     <div class="flex items-center gap-3 animate-fade-up">
       <span class="dot dot-wait"></span> Loading…

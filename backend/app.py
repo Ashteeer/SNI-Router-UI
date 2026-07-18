@@ -481,6 +481,26 @@ async def host_certcheck(host_id: int, path: str, user=Depends(require_auth)):
         raise HTTPException(status_code=502, detail=f"agent unreachable: {e}")
 
 
+# TFO host-sysctl check/enable via the agent (declared before the {action} POST
+# catch-all so the enable POST isn't swallowed as an unknown "action").
+@app.get("/api/hosts/{host_id}/tfo")
+async def host_tfo(host_id: int, user=Depends(require_auth)):
+    host = require_host(host_id)
+    try:
+        return await collector.tfo_status(host)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"agent unreachable: {e}")
+
+
+@app.post("/api/hosts/{host_id}/tfo")
+async def host_tfo_enable(host_id: int, user=Depends(require_auth)):
+    host = require_host(host_id)
+    try:
+        return await collector.tfo_enable(host)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"agent unreachable: {e}")
+
+
 # declared before the {action} catch-all so it isn't swallowed as an "action"
 @app.post("/api/hosts/{host_id}/agent-update")
 async def host_agent_update(host_id: int, user=Depends(require_auth)):

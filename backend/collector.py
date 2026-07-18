@@ -119,6 +119,27 @@ async def cert_check(host, path):
         return r.json()
 
 
+async def tfo_status(host):
+    """Read the host's net.ipv4.tcp_fastopen via the agent (for the listener TFO
+    warning). Returns {value, enabled}."""
+    port = host.get("agent_port") or 9110
+    url = f"http://{_agent_ip(host)}:{port}/tfo"
+    async with httpx.AsyncClient(timeout=8) as cl:
+        r = await cl.get(url, headers=_agent_headers(host))
+        r.raise_for_status()
+        return r.json()
+
+
+async def tfo_enable(host):
+    """Ask the agent to enable TFO (net.ipv4.tcp_fastopen = 3) on the host."""
+    port = host.get("agent_port") or 9110
+    url = f"http://{_agent_ip(host)}:{port}/tfo"
+    async with httpx.AsyncClient(timeout=8) as cl:
+        r = await cl.post(url, headers=_agent_headers(host))
+        r.raise_for_status()
+        return r.json()
+
+
 async def poll_host(host):
     values = {"up": 0}
     # /metrics is served on the unified api bind (same port + token as admin).

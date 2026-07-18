@@ -2,7 +2,7 @@
 // Mode-aware forms over the parsed config object. Mutates `model` in place;
 // the parent watches it deeply and re-serializes to YAML (kept in sync with
 // the manual editor). See config.md for the field-applicability matrix.
-import { ref, onBeforeUnmount } from 'vue'
+import { ref, watch, onBeforeUnmount } from 'vue'
 import { api } from '../api'
 import InfoTip from './InfoTip.vue'
 
@@ -64,9 +64,42 @@ function setProto(l, p) {
 }
 // fast_open_qlen without fast_open is a warning — untick clears it too.
 function setFastOpen(l, on) {
-  if (on) l.fast_open = true
+  if (on) { l.fast_open = true; checkTfo() }
   else { delete l.fast_open; delete l.fast_open_qlen }
 }
+
+// --- host TFO sysctl status (#5) -------------------------------------------
+// net.ipv4.tcp_fastopen is host-wide, so one status covers every listener. We
+// only warn when we positively know it's off (checked && !enabled).
+const tfo = ref(null)        // { value, enabled } | null (unknown / agent down)
+const tfoBusy = ref(false)
+const toast = ref(null)      // { msg, ok } | null
+let toastTimer = null
+function tfoOff() { return tfo.value != null && tfo.value.enabled === false }
+async function checkTfo() {
+  if (!props.hostId) return
+  try { tfo.value = await api.tfoStatus(props.hostId) }
+  catch { tfo.value = null } // agent unreachable — can't verify, so don't nag
+}
+async function enableTfo() {
+  if (!props.hostId || tfoBusy.value) return
+  tfoBusy.value = true
+  try {
+    tfo.value = await api.tfoEnable(props.hostId)
+    if (tfo.value?.enabled) showToast('TCP Fast Open enabled on the host.')
+    else showToast('Enable request sent, but TFO still reads off.', false)
+  } catch (e) {
+    showToast('Failed to enable TFO: ' + e.message, false)
+  } finally { tfoBusy.value = false }
+}
+function showToast(msg, ok = true) {
+  toast.value = { msg, ok }
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { toast.value = null }, 4000)
+}
+// check the host's TFO sysctl once a config with an enabled listener TFO loads
+watch(() => (props.model?.listeners || []).some((l) => l.fast_open),
+  (has) => { if (has && tfo.value == null) checkTfo() }, { immediate: true })
 // Off == absent for a default-false bool: keep it out of the YAML entirely.
 function setFlag(obj, key, on) {
   if (on) obj[key] = true
@@ -177,32 +210,54 @@ function certClass(c, isKey = false) {
 // The dragged card floats with the cursor (translateY) and a thin line shows
 // where it will land. `kind`/`key` scope a drag so items never cross lists.
 // `over` is the insertion index (0..n) among the current items.
-const drag = ref(null) // { kind, key, from, over, el, startY, dy }
+const drag = ref(null) // { kind, key, from, over, el, startY, startScroll, dy }
+let lastClientY = 0
+let autoRaf = null
 
 function dragDown(e, kind, from, key = null) {
   const el = e.currentTarget.closest('[data-dragitem]')
   if (!el) return
   e.preventDefault()
-  drag.value = { kind, key, from, over: from, el, startY: e.clientY, dy: 0 }
+  lastClientY = e.clientY
+  drag.value = { kind, key, from, over: from, el, startY: e.clientY, startScroll: window.scrollY, dy: 0 }
   window.addEventListener('pointermove', dragMove)
   window.addEventListener('pointerup', dragUp)
+  autoRaf = requestAnimationFrame(autoScroll)
 }
-function dragMove(e) {
+// recompute the float offset (document-relative, so the card stays under the cursor
+// even while the page auto-scrolls) and the drop index from sibling midpoints.
+function recompute() {
   const d = drag.value
   if (!d) return
-  d.dy = e.clientY - d.startY
+  d.dy = (lastClientY + window.scrollY) - (d.startY + d.startScroll)
   const items = [...d.el.parentElement.querySelectorAll(':scope > [data-dragitem]')]
   let over = items.length
   for (let i = 0; i < items.length; i++) {
     const r = items[i].getBoundingClientRect()
-    if (e.clientY < r.top + r.height / 2) { over = i; break }
+    if (lastClientY < r.top + r.height / 2) { over = i; break }
   }
   d.over = over
   drag.value = { ...d }
 }
+function dragMove(e) {
+  if (!drag.value) return
+  lastClientY = e.clientY
+  recompute()
+}
+// scroll the page when the cursor is near the top/bottom edge mid-drag (#4)
+function autoScroll() {
+  if (!drag.value) { autoRaf = null; return }
+  const margin = 90, maxSpeed = 16, h = window.innerHeight
+  let delta = 0
+  if (lastClientY < margin) delta = -Math.ceil(maxSpeed * (1 - lastClientY / margin))
+  else if (lastClientY > h - margin) delta = Math.ceil(maxSpeed * (1 - (h - lastClientY) / margin))
+  if (delta) { window.scrollBy(0, delta); recompute() }
+  autoRaf = requestAnimationFrame(autoScroll)
+}
 function dragUp() {
   window.removeEventListener('pointermove', dragMove)
   window.removeEventListener('pointerup', dragUp)
+  if (autoRaf) { cancelAnimationFrame(autoRaf); autoRaf = null }
   const d = drag.value
   drag.value = null
   if (!d) return
@@ -244,11 +299,16 @@ function moveBackend(from, to) {
 onBeforeUnmount(() => {
   window.removeEventListener('pointermove', dragMove)
   window.removeEventListener('pointerup', dragUp)
+  if (autoRaf) cancelAnimationFrame(autoRaf)
 })
 </script>
 
 <template>
   <div v-if="model" class="space-y-6">
+    <Transition name="modal">
+      <div v-if="toast" class="toast" :class="{ 'toast-err': !toast.ok }">{{ toast.msg }}</div>
+    </Transition>
+
     <!-- Listeners -->
     <section>
       <div class="mb-2 flex items-center justify-between">
@@ -296,11 +356,26 @@ onBeforeUnmount(() => {
             </div>
 
             <div class="mb-3">
-              <label class="flex items-center gap-2 text-sm text-slate-300">
-                <input :id="'tfo' + li" type="checkbox" :checked="!!l.fast_open"
-                       @change="setFastOpen(l, $event.target.checked)" />
-                TCP Fast Open (accept client TFO)
-              </label>
+              <div class="flex items-center gap-1">
+                <label class="flex items-center gap-2 text-sm text-slate-300">
+                  <input :id="'tfo' + li" type="checkbox" :checked="!!l.fast_open"
+                         @change="setFastOpen(l, $event.target.checked)" />
+                  TCP Fast Open (accept client TFO)
+                </label>
+                <span v-if="l.fast_open && tfoOff()" class="tfo-wrap relative inline-flex">
+                  <button type="button" class="tfo-warn" :disabled="tfoBusy" @click="enableTfo"
+                          aria-label="Enable TCP Fast Open on the host">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                      <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
+                    </svg>
+                  </button>
+                  <span class="infotip-pop tfo-tip">
+                    {{ tfoBusy ? 'Enabling TFO on the host…' : 'TCP Fast Open is not enabled on this host (net.ipv4.tcp_fastopen ≠ 3). Click to enable it.' }}
+                  </span>
+                </span>
+              </div>
               <p class="mt-1 text-xs text-slate-500">
                 Lets a returning client send its ClientHello inside the SYN, saving one RTT.
                 Needs <code>net.ipv4.tcp_fastopen = 3</code> on the host — otherwise the router
@@ -448,7 +523,7 @@ onBeforeUnmount(() => {
               </div>
               <div>
                 <label class="label">TLS key path</label>
-                <input :value="be.tls?.key" class="input"
+                <input :value="be.tls?.key" class="input" placeholder="(or use default_tls)"
                   @input="ensure(be, 'tls', {}).key = $event.target.value"
                   @blur="checkCert('be:' + name + ':key', be.tls?.key)" />
                 <p v-if="certs['be:' + name + ':key']" class="mt-1 text-xs" :class="certClass(certs['be:' + name + ':key'], true)">

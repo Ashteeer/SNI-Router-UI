@@ -42,16 +42,22 @@ function pct(used, total) {
   return total ? Math.round((used / total) * 100) : null
 }
 
-async function loadHistory() {
+async function loadHistory(initial = false) {
   if (!props.hostId) return
   try {
     hist.value = await api.history(props.hostId, range.value)
     err.value = ''
-  } catch (e) { err.value = e.message }
+  } catch (e) {
+    // only surface errors from an explicit load (mount / host / range change);
+    // a transient blip on the 15s background refresh shouldn't flap the banner.
+    if (initial) err.value = e.message
+  }
 }
 async function loadLive() {
   if (!props.hostId) return
-  try { live.value = await api.live(props.hostId) } catch (e) { err.value = e.message }
+  // pure status refresh (every 5s): keep the last good value and never flap the
+  // error banner on a transient network blip — the next tick recovers.
+  try { live.value = await api.live(props.hostId) } catch { /* ignore */ }
 }
 async function loadAgent() {
   agent.value = null
@@ -126,13 +132,13 @@ const tiles = computed(() => [
   { label: 'Version', value: live.value?.status?.version || '—', accent: '#f472b6' },
 ])
 
-watch(() => props.hostId, () => { hist.value = null; live.value = null; loadHistory(); loadLive(); loadAgent() })
-watch(range, loadHistory)
+watch(() => props.hostId, () => { hist.value = null; live.value = null; loadHistory(true); loadLive(); loadAgent() })
+watch(range, () => loadHistory(true))
 
 onMounted(() => {
-  loadHistory(); loadLive(); loadAgent(); loadVersion()
+  loadHistory(true); loadLive(); loadAgent(); loadVersion()
   liveTimer = setInterval(loadLive, 5000)
-  histTimer = setInterval(loadHistory, 15000)
+  histTimer = setInterval(() => loadHistory(false), 15000)
 })
 onBeforeUnmount(() => { clearInterval(liveTimer); clearInterval(histTimer) })
 </script>

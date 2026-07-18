@@ -50,6 +50,8 @@ export const api = {
   updateUi: () => req('POST', '/update/ui'),
   agentInfo: (id) => req('GET', `/hosts/${id}/agent`),
   certCheck: (id, path) => req('GET', `/hosts/${id}/certcheck?path=${encodeURIComponent(path)}`),
+  tfoStatus: (id) => req('GET', `/hosts/${id}/tfo`),
+  tfoEnable: (id) => req('POST', `/hosts/${id}/tfo`),
   updateAgent: (id) => req('POST', `/hosts/${id}/agent-update`),
   updateRouter: (id) => req('POST', `/hosts/${id}/update`),
 

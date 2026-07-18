@@ -49,19 +49,19 @@ body {
   background: var(--bg);
 }
 
-/* Aurora glows live on a viewport-fixed layer behind everything, so no matter how
-   long the page is, scrolling never reveals a hard edge where the gradients end —
-   the background is constant under the scrolling content. */
-body::before {
-  content: '';
+/* Aurora glows live on a viewport-fixed layer (a real .aurora element rendered
+   once in App.vue) behind everything. Because it's fixed, scrolling never moves
+   it — no hard edge where a gradient stops. Glows sit well inside the viewport so
+   there's no flat/monotone band at the very top. */
+.aurora {
   position: fixed;
   inset: 0;
   z-index: -1;
   pointer-events: none;
   background:
-    radial-gradient(1200px 620px at 12% -12%, rgba(99, 102, 241, 0.16), transparent 60%),
-    radial-gradient(1000px 520px at 108% 4%, rgba(34, 211, 238, 0.10), transparent 55%),
-    radial-gradient(1000px 760px at 50% 118%, rgba(168, 85, 247, 0.12), transparent 60%),
+    radial-gradient(1100px 800px at 18% 16%, rgba(99, 102, 241, 0.16), transparent 60%),
+    radial-gradient(950px 700px at 86% 24%, rgba(34, 211, 238, 0.10), transparent 55%),
+    radial-gradient(1100px 900px at 50% 104%, rgba(168, 85, 247, 0.13), transparent 60%),
     linear-gradient(180deg, var(--bg-2), var(--bg));
 }
 
@@ -147,7 +147,10 @@ body::before {
     @apply w-full text-sm;
     color: var(--text);
     border-radius: var(--radius-sm);
-    background: rgba(255, 255, 255, 0.035);
+    /* background-color (not the `background` shorthand): a shorthand here resets
+       background-repeat to `repeat`, which tiled the select chevron across the
+       whole control when focused/open. */
+    background-color: rgba(255, 255, 255, 0.035);
     border: 1px solid var(--border);
     padding: 0.55rem 0.75rem;
     outline: none;
@@ -156,7 +159,7 @@ body::before {
   .input::placeholder { color: var(--text-faint); }
   .input:focus {
     border-color: var(--accent);
-    background: rgba(255, 255, 255, 0.05);
+    background-color: rgba(255, 255, 255, 0.05);
     box-shadow: 0 0 0 3px rgba(129, 140, 248, 0.18);
   }
   /* native select arrow is hidden, so paint our own chevron to signal "openable" */
@@ -237,6 +240,28 @@ body::before {
     backdrop-filter: blur(8px);
     animation: fade-up .14s ease both;
   }
+
+  /* yellow "!" warning (e.g. host TFO not enabled) — click to act, hover for a tip */
+  .tfo-warn {
+    display: inline-grid; place-items: center;
+    width: 18px; height: 18px; margin-left: 6px; vertical-align: middle;
+    color: #f59e0b; cursor: pointer;
+    transition: transform .12s, filter .2s;
+  }
+  .tfo-warn:hover { transform: scale(1.14); filter: drop-shadow(0 0 6px rgba(245, 158, 11, 0.55)); }
+  .tfo-tip { display: none; }
+  .tfo-wrap:hover .tfo-tip { display: block; }
+
+  /* top-of-screen toast (success notice) */
+  .toast {
+    position: fixed; top: 18px; left: 50%; transform: translateX(-50%);
+    z-index: 60; padding: 10px 16px; border-radius: 12px;
+    background: rgba(16, 185, 129, 0.14); border: 1px solid rgba(16, 185, 129, 0.4);
+    color: #6ee7b7; font-size: 13px; font-weight: 500;
+    backdrop-filter: blur(10px); box-shadow: 0 12px 30px -10px rgba(0, 0, 0, 0.6);
+    animation: fade-up .2s ease both;
+  }
+  .toast-err { background: rgba(244, 63, 94, 0.14); border-color: rgba(244, 63, 94, 0.4); color: #fda4af; }
 
   /* drop indicator line for interactive drag-reorder — deliberately subtle */
   .drop-line {

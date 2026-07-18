@@ -169,7 +169,8 @@ systemd units: `backend/sni-router-ui.service`, `agent/sni-router-agent.service`
 | `GET /version` (`?force=1` skips 1h cache) · `POST /update/ui` | UI+router latest-check · self-update |
 | `POST /provision` | clean-install agent/router over SSH (`targets`, opt. `host_id`) |
 | `GET /hosts` · `POST /hosts` · `PUT /hosts/{id}` · `DELETE /hosts/{id}` · `POST /hosts/delete` | host CRUD (PUT = edit; incl. `agent_ip`) |
-| `GET /hosts/{id}/status` · `/live` · `/history?range=1h\|6h\|24h\|48h` · `/agent` · `/certcheck?path=` | metrics · agent `/sys` (IPs+version) · TLS cert/key check via the agent |
+| `GET /hosts/{id}/status` · `/live` · `/history?range=1h\|6h\|24h\|48h` · `/agent` · `/certcheck?path=` · `/tfo` | metrics · agent `/sys` (IPs+version) · TLS cert/key check · host TFO sysctl status, all via the agent |
+| `POST /hosts/{id}/tfo` | ask the agent to enable `net.ipv4.tcp_fastopen = 3` on the host |
 | `GET/PUT /hosts/{id}/config` · `POST /hosts/{id}/reload\|restart\|update\|agent-update` | config control · router self-update (proxies router `POST /update`) · agent self-update |
 
 ## Config sync logic (Configs tab)
@@ -235,7 +236,10 @@ so even a read-only-admin build works.
 - **TCP Fast Open**, two independent switches (config.md §2.2, §3.4):
   - *listener* `fast_open` — accept TFO from clients. `proto: tcp` only (a hard
     config error on `udp`). Needs `net.ipv4.tcp_fastopen = 3` on the host; if
-    unset the router still starts and only warns.
+    unset the router still starts and only warns. **The UI checks this via the
+    agent** (`GET /tfo`) when a listener's TFO is on: if the host sysctl isn't set
+    it shows a yellow `!` next to the toggle; clicking it enables TFO on the host
+    (`POST /tfo` → agent writes the sysctl + persists it) and toasts success.
   - *backend* `fast_open` — use TFO when connecting **to** `servers`. Every mode
     but `redirect_https` (which never connects to a backend).
 - **Accept queues** (config.md §2.3): per-listener `backlog` and

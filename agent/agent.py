@@ -31,7 +31,7 @@ import sys
 import time
 import urllib.parse
 
-AGENT_VERSION = "1.11.1"
+AGENT_VERSION = "1.11.2"
 CONF_PATH = os.environ.get("SNI_AGENT_CONF", "/etc/sni-router-agent/agent.conf")
 
 
@@ -193,6 +193,33 @@ def cert_info(path):
             "days_left": days, "subject_cn": cn}
 
 
+TFO_SYSCTL = "/proc/sys/net/ipv4/tcp_fastopen"
+
+
+def tfo_status():
+    """Read net.ipv4.tcp_fastopen. Bit 2 (value & 2) = server-side TFO, which a
+    listener needs to accept a client's TFO. Returns the raw value + that flag."""
+    try:
+        with open(TFO_SYSCTL) as f:
+            v = int(f.read().strip())
+    except Exception:
+        return {"value": None, "enabled": False}
+    return {"value": v, "enabled": bool(v & 2)}
+
+
+def tfo_enable():
+    """Turn on TFO for both client and server (value 3) at runtime and persist it
+    across reboots. ponytail: agent runs as root, so it can write sysctl + /etc."""
+    with open(TFO_SYSCTL, "w") as f:
+        f.write("3\n")
+    try:
+        with open("/etc/sysctl.d/99-sni-router-tfo.conf", "w") as f:
+            f.write("net.ipv4.tcp_fastopen = 3\n")
+    except Exception:
+        pass
+    return tfo_status()
+
+
 def start_update():
     """Fire the CLI updater in its own systemd transient scope so the agent's
     own `systemctl restart` (inside install-agent.sh) doesn't kill the updater
@@ -240,18 +267,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except Exception as e:  # noqa: BLE001
                 self._json(500, {"error": str(e)})
             return
+        if parsed.path == "/tfo":
+            try:
+                self._json(200, tfo_status())
+            except Exception as e:  # noqa: BLE001
+                self._json(500, {"error": str(e)})
+            return
         self.send_response(404); self.end_headers()
 
     def do_POST(self):
         if not self._auth_ok():
             self.send_response(401); self.end_headers(); return
-        if self.path.split("?")[0] != "/update":
-            self.send_response(404); self.end_headers(); return
-        try:
-            start_update()
-            self._json(200, {"updating": True, "version": AGENT_VERSION})
-        except Exception as e:  # noqa: BLE001
-            self._json(500, {"error": str(e)})
+        route = self.path.split("?")[0]
+        if route == "/update":
+            try:
+                start_update()
+                self._json(200, {"updating": True, "version": AGENT_VERSION})
+            except Exception as e:  # noqa: BLE001
+                self._json(500, {"error": str(e)})
+            return
+        if route == "/tfo":
+            try:
+                self._json(200, tfo_enable())
+            except Exception as e:  # noqa: BLE001
+                self._json(500, {"error": str(e)})
+            return
+        self.send_response(404); self.end_headers()
 
     def log_message(self, *args):
         pass  # quiet
