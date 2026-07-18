@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { api } from '../api'
-import { cidrRange, verNewer } from '../ip'
+import { ipOnly, verNewer } from '../ip'
 import UChart from '../components/UChart.vue'
 
 const props = defineProps({ hosts: Array, hostId: Number })
@@ -246,7 +246,7 @@ onBeforeUnmount(() => { clearInterval(liveTimer); clearInterval(histTimer) })
           </h3>
           <div v-if="agent?.ips?.length" class="flex flex-wrap gap-2">
             <span v-for="c in agent.ips" :key="c"
-              class="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1 font-mono text-sm text-slate-300">{{ cidrRange(c) }}</span>
+              class="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1 font-mono text-sm text-slate-300">{{ ipOnly(c) }}</span>
           </div>
           <p v-else class="text-sm text-slate-500">No agent data — install/enable the metrics agent on this host.</p>
         </div>

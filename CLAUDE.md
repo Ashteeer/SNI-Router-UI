@@ -46,7 +46,11 @@ Backend (FastAPI, one process)         ── serves built SPA + REST + poller
 ```
 
 **Self-update:** the repo-root `VERSION` file is the single source of truth
-(bumped per release; the agent embeds it as `AGENT_VERSION`). The backend
+(bumped per release; the agent embeds it as `AGENT_VERSION`). `install-agent.sh`
+**seds `AGENT_VERSION` from the fetched `VERSION`** on every install/update, so a
+self-update always moves the reported version even if the literal in `agent.py`
+lagged — a stale literal once made the agent's "update available" stick forever
+(the version never changed after updating). The backend
 compares it to the latest GitHub release tag. Updating the web UI runs
 `sni-router-ui -u` in a **systemd transient scope** (`systemd-run --collect`) so
 the installer's own `systemctl restart` doesn't kill the updater by tearing down
@@ -165,7 +169,7 @@ systemd units: `backend/sni-router-ui.service`, `agent/sni-router-agent.service`
 | `GET /version` (`?force=1` skips 1h cache) · `POST /update/ui` | UI+router latest-check · self-update |
 | `POST /provision` | clean-install agent/router over SSH (`targets`, opt. `host_id`) |
 | `GET /hosts` · `POST /hosts` · `PUT /hosts/{id}` · `DELETE /hosts/{id}` · `POST /hosts/delete` | host CRUD (PUT = edit; incl. `agent_ip`) |
-| `GET /hosts/{id}/status` · `/live` · `/history?range=1h\|6h\|24h\|48h` · `/agent` | metrics · agent `/sys` (IPs+version) |
+| `GET /hosts/{id}/status` · `/live` · `/history?range=1h\|6h\|24h\|48h` · `/agent` · `/certcheck?path=` | metrics · agent `/sys` (IPs+version) · TLS cert/key check via the agent |
 | `GET/PUT /hosts/{id}/config` · `POST /hosts/{id}/reload\|restart\|update\|agent-update` | config control · router self-update (proxies router `POST /update`) · agent self-update |
 
 ## Config sync logic (Configs tab)
@@ -251,9 +255,22 @@ so even a read-only-admin build works.
   `https` for same-host:443, or a full URL for a custom port) and `404 Not Found`
   (`respond` 404 + body) — plus `forward`/`respond`/`redirect` for advanced use.
   `path` is a prefix match; `*` = all paths (no trailing `*` needed).
-- **Drag-to-reorder** (native HTML5 DnD, no dep) for listeners, routes (within a
-  listener), backends (map keys rebuilt), and http_rules — scoped by `kind`/`key`
-  so items can't cross categories.
+- **Drag-to-reorder** — interactive **pointer drag** (no dep): the grabbed card
+  floats with the cursor (`translateY`) and a subtle `.drop-line` marks where it
+  lands; `over` is the insertion index from sibling midpoints. Covers listeners,
+  routes (within a listener), backends (map keys rebuilt), and http_rules — scoped
+  by `kind`/`key` (queried via `:scope > [data-dragitem]`) so items can't cross
+  categories. Window `pointermove`/`pointerup` listeners are cleaned up on unmount.
+- **Rename a backend** rebuilds the map **in place** (no alphabetical jump) and
+  **cascades** the new name to every `route.backend` that referenced the old one.
+- **Timeout fields** carry a small `InfoTip` (`?`) with a one-line explanation each.
+- **TLS cert/key validation** (`VisualConfig` needs `hostId`): on blur, cert/key
+  paths are checked via the host agent's `GET /certcheck` — existence, readability,
+  and (for a cert) `expires <date> — <n> days left` under `default_tls`. The agent
+  decodes with stdlib `ssl._ssl._test_decode_cert` + `ssl.cert_time_to_seconds`;
+  it returns only metadata, never file contents.
+- **Server IPs display as plain addresses** (`ip.js` `ipOnly`, mask stripped) — the
+  earlier mask-aware range rendering (`cidrRange`) is kept in the file but unused.
 - Published: https://github.com/Ashteeer/SNI-Router-UI
 
 ### Compatibility note

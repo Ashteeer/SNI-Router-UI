@@ -25,11 +25,13 @@ import ipaddress
 import json
 import os
 import socketserver
+import ssl
 import subprocess
 import sys
 import time
+import urllib.parse
 
-AGENT_VERSION = "1.10.0"
+AGENT_VERSION = "1.11.1"
 CONF_PATH = os.environ.get("SNI_AGENT_CONF", "/etc/sni-router-agent/agent.conf")
 
 
@@ -161,6 +163,36 @@ def sample():
     }
 
 
+def cert_info(path):
+    """Inspect a TLS cert/key file on this host for the UI's Configs validation.
+    Returns only metadata (existence, readability, and — for a certificate — its
+    expiry), never file contents. Uses stdlib ssl to decode; a key or non-cert
+    file just comes back is_cert=False. ponytail: token-gated like everything else."""
+    if not path or not os.path.exists(path):
+        return {"exists": False, "readable": False}
+    if not os.access(path, os.R_OK):
+        return {"exists": True, "readable": False}
+    try:
+        d = ssl._ssl._test_decode_cert(path)  # stdlib PEM decoder, no external deps
+    except Exception:
+        return {"exists": True, "readable": True, "is_cert": False}
+    not_after = d.get("notAfter")
+    expires = days = None
+    try:
+        expires = int(ssl.cert_time_to_seconds(not_after))
+        days = int((expires - time.time()) // 86400)
+    except Exception:
+        pass
+    cn = None
+    for rdn in d.get("subject", ()):
+        for k, v in rdn:
+            if k == "commonName":
+                cn = v
+    return {"exists": True, "readable": True, "is_cert": True,
+            "not_after": not_after, "expires_epoch": expires,
+            "days_left": days, "subject_cn": cn}
+
+
 def start_update():
     """Fire the CLI updater in its own systemd transient scope so the agent's
     own `systemctl restart` (inside install-agent.sh) doesn't kill the updater
@@ -194,12 +226,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if not self._auth_ok():
             self.send_response(401); self.end_headers(); return
-        if self.path.split("?")[0] != "/sys":
-            self.send_response(404); self.end_headers(); return
-        try:
-            self._json(200, sample())
-        except Exception as e:  # noqa: BLE001 — report, don't crash the thread
-            self._json(500, {"error": str(e)})
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/sys":
+            try:
+                self._json(200, sample())
+            except Exception as e:  # noqa: BLE001 — report, don't crash the thread
+                self._json(500, {"error": str(e)})
+            return
+        if parsed.path == "/certcheck":
+            p = (urllib.parse.parse_qs(parsed.query).get("path") or [""])[0]
+            try:
+                self._json(200, cert_info(p))
+            except Exception as e:  # noqa: BLE001
+                self._json(500, {"error": str(e)})
+            return
+        self.send_response(404); self.end_headers()
 
     def do_POST(self):
         if not self._auth_ok():

@@ -2,7 +2,7 @@
 import { ref, watch, onMounted, nextTick } from 'vue'
 import jsyaml from 'js-yaml'
 import { api } from '../api'
-import { cidrRange } from '../ip'
+import { ipOnly } from '../ip'
 import Editor from '../components/Editor.vue'
 import VisualConfig from '../components/VisualConfig.vue'
 
@@ -125,7 +125,7 @@ const currentHost = () => props.hosts.find((h) => h.id === props.hostId)
       <div class="label mb-1.5">IP addresses available on this server</div>
       <div class="flex flex-wrap gap-2">
         <span v-for="c in ips" :key="c"
-          class="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1 font-mono text-sm text-slate-300">{{ cidrRange(c) }}</span>
+          class="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1 font-mono text-sm text-slate-300">{{ ipOnly(c) }}</span>
       </div>
     </div>
 
@@ -174,7 +174,7 @@ const currentHost = () => props.hosts.find((h) => h.id === props.hostId)
     <p v-if="!hosts.length" class="text-slate-500">No hosts. Add one in the Hosts tab.</p>
 
     <div v-else>
-      <VisualConfig v-show="subtab === 'visual'" :model="model" />
+      <VisualConfig v-show="subtab === 'visual'" :model="model" :host-id="hostId" />
       <div v-show="subtab === 'manual'" class="h-[70vh]">
         <Editor :model-value="yamlText" @update:model-value="onEditorInput" />
       </div>

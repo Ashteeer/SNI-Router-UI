@@ -1,3 +1,12 @@
+// The plain server IP with any /mask stripped — the address the agent actually
+// reported (e.g. "2a12:bec4:…::2/64" -> "2a12:bec4:…::2"). This is the format the
+// UI shows: real host addresses only, no masks or derived ranges.
+export function ipOnly(cidr) {
+  const s = String(cidr)
+  const slash = s.lastIndexOf('/')
+  return slash < 0 ? s : s.slice(0, slash)
+}
+
 // Display an interface CIDR the way the user asked: a mask covering a single
 // address shows that one IP; a wider mask shows the covered range as "from – to"
 // (network → last). Works for both IPv4 and IPv6. ponytail: the agent already

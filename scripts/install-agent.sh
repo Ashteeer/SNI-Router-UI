@@ -92,6 +92,11 @@ echo ">> installing sni-router agent ($REF) -> $INSTALL_DIR"
 install -d -m 0755 "$INSTALL_DIR" "$CONF_DIR"
 curl -fsSL "https://raw.githubusercontent.com/$REPO/$REF/agent/agent.py" -o "$INSTALL_DIR/agent.py" \
   || die "download failed (check version/tag: $REF)"
+# Keep the agent's reported version in lockstep with the release VERSION file, so
+# a self-update always bumps AGENT_VERSION even if agent.py's literal lagged behind
+# (that gap once made "update available" stick forever — the version never moved).
+VER="$(curl -fsSL "https://raw.githubusercontent.com/$REPO/$REF/VERSION" 2>/dev/null | tr -d '[:space:]')"
+[ -n "$VER" ] && sed -i "s/^AGENT_VERSION = .*/AGENT_VERSION = \"$VER\"/" "$INSTALL_DIR/agent.py" || true
 chmod 0755 "$INSTALL_DIR/agent.py"
 
 umask 077

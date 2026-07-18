@@ -472,6 +472,15 @@ async def host_agent(host_id: int, user=Depends(require_auth)):
         raise HTTPException(status_code=502, detail=f"agent unreachable: {e}")
 
 
+@app.get("/api/hosts/{host_id}/certcheck")
+async def host_certcheck(host_id: int, path: str, user=Depends(require_auth)):
+    host = require_host(host_id)
+    try:
+        return await collector.cert_check(host, path)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"agent unreachable: {e}")
+
+
 # declared before the {action} catch-all so it isn't swallowed as an "action"
 @app.post("/api/hosts/{host_id}/agent-update")
 async def host_agent_update(host_id: int, user=Depends(require_auth)):

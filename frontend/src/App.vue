@@ -87,10 +87,9 @@ const showHostSwitcher = computed(() => tab.value === 'dashboard' || tab.value =
               <rect x="3" y="4" width="18" height="6" rx="1.5" /><rect x="3" y="14" width="18" height="6" rx="1.5" /><path d="M7 7h.01M7 17h.01" />
             </svg>
             <select v-model="currentHostId"
-              class="input w-[8.5rem] cursor-pointer !py-1.5 !pl-8 !pr-7 text-sm sm:w-44">
+              class="input w-[8.5rem] cursor-pointer !py-1.5 !pl-8 text-sm sm:w-44">
               <option v-for="h in hosts" :key="h.id" :value="h.id">{{ h.name }}</option>
             </select>
-            <svg class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-slate-500" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 9l6 6 6-6" /></svg>
           </div>
 
           <button class="btn-ghost !px-2.5" title="Log out" @click="logout">

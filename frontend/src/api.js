@@ -49,6 +49,7 @@ export const api = {
   version: (force) => req('GET', force ? '/version?force=1' : '/version'),
   updateUi: () => req('POST', '/update/ui'),
   agentInfo: (id) => req('GET', `/hosts/${id}/agent`),
+  certCheck: (id, path) => req('GET', `/hosts/${id}/certcheck?path=${encodeURIComponent(path)}`),
   updateAgent: (id) => req('POST', `/hosts/${id}/agent-update`),
   updateRouter: (id) => req('POST', `/hosts/${id}/update`),
 
