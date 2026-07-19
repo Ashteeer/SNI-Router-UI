@@ -216,6 +216,27 @@ function certClass(c, isKey = false) {
   if (c.state === 'notcert') return isKey ? 'text-emerald-400' : 'text-amber-400'
   return 'text-red-400'
 }
+// Auto-check every cert/key path when a config loads, so the expiry shows without
+// the user having to focus+blur each field (which is why it never appeared before).
+function checkAllCerts() {
+  const m = props.model
+  if (!m || !props.hostId) return
+  checkCert('default:cert', m.default_tls?.cert)
+  checkCert('default:key', m.default_tls?.key)
+  for (const [name, be] of Object.entries(m.backends || {}))
+    if (be?.tls) { checkCert('be:' + name + ':cert', be.tls.cert); checkCert('be:' + name + ':key', be.tls.key) }
+}
+// Fire on a *fresh* model (host switch / reload / first load) — the parent nulls
+// `model` then reassigns it, so this watches the reference, not deep edits. That
+// keeps typing in a cert field (in-place mutation) on the blur handler alone.
+let certsLoadedFor = null
+watch(() => props.model, (m) => {
+  if (!m) { certsLoadedFor = null; return }
+  if (!props.hostId || certsLoadedFor === props.hostId) return
+  certsLoadedFor = props.hostId
+  certs.value = {}
+  checkAllCerts()
+}, { immediate: true })
 
 // --- interactive pointer drag-reorder (#4) ---------------------------------
 // The dragged card floats with the cursor (translateY) and a thin line shows

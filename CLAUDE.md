@@ -80,7 +80,11 @@ stdlib script reading `/proc` — one per managed host.
 ### UI design system (v1.11.0 redesign)
 
 Dark-only **glassmorphism**: frosted `backdrop-blur` surfaces over an aurora
-gradient body, one indigo→violet accent, soft glows. **All visual tokens are CSS
+gradient body, one indigo→violet accent, soft glows. The aurora is a viewport-fixed
+`.aurora` element (rendered once in `App.vue`) carrying `transform: translateZ(0)`
+so it gets its **own compositor layer and paints on the first frame** — a fixed,
+negative-`z-index` layer without that is painted lazily and only appears once a
+scroll invalidates the root (the "blank bg until you scroll" bug). **All visual tokens are CSS
 variables** in [`style.css`](frontend/src/style.css) (`--surface`, `--border`,
 `--accent`, `--glow`, `--radius`, …) — retune the whole look in one place. Reusable
 component classes (`.card` / `.card-hover`, `.btn-*`, `.input`, `.label`,
@@ -273,11 +277,15 @@ so even a read-only-admin build works.
 - **Rename a backend** rebuilds the map **in place** (no alphabetical jump) and
   **cascades** the new name to every `route.backend` that referenced the old one.
 - **Timeout fields** carry a small `InfoTip` (`?`) with a one-line explanation each.
-- **TLS cert/key validation** (`VisualConfig` needs `hostId`): on blur, cert/key
-  paths are checked via the host agent's `GET /certcheck` — existence, readability,
-  and (for a cert) `expires <date> — <n> days left` under `default_tls`. The agent
-  decodes with stdlib `ssl._ssl._test_decode_cert` + `ssl.cert_time_to_seconds`;
-  it returns only metadata, never file contents.
+- **TLS cert/key validation** (`VisualConfig` needs `hostId`): every cert/key path
+  is checked via the host agent's `GET /certcheck` — existence, readability, and
+  (for a cert) `expires <date> — <n> days left` under `default_tls`. Checks run
+  **automatically when a config loads** (a non-deep watch on `model`, keyed by
+  `hostId`, so it fires once per host/reload — not on every keystroke) **and on
+  blur** of a path field. Without the auto-check the expiry never showed unless the
+  user happened to focus+blur the field, so it read as "cert duration missing on
+  every host". The agent decodes with stdlib `ssl._ssl._test_decode_cert` +
+  `ssl.cert_time_to_seconds`; it returns only metadata, never file contents.
 - **Server IPs display as plain addresses** (`ip.js` `ipOnly`, mask stripped) — the
   earlier mask-aware range rendering (`cidrRange`) is kept in the file but unused.
 - Published: https://github.com/Ashteeer/SNI-Router-UI

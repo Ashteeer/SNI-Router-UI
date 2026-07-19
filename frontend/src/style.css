@@ -52,12 +52,17 @@ body {
 /* Aurora glows live on a viewport-fixed layer (a real .aurora element rendered
    once in App.vue) behind everything. Because it's fixed, scrolling never moves
    it — no hard edge where a gradient stops. Glows sit well inside the viewport so
-   there's no flat/monotone band at the very top. */
+   there's no flat/monotone band at the very top.
+   `transform: translateZ(0)` forces its own compositor layer so it paints on the
+   first frame — without it a fixed, negative-z-index layer is painted lazily and
+   only shows up once a scroll invalidates the root (blank bg → gradient on scroll). */
 .aurora {
   position: fixed;
   inset: 0;
   z-index: -1;
   pointer-events: none;
+  transform: translateZ(0);
+  will-change: transform;
   background:
     radial-gradient(1100px 800px at 18% 16%, rgba(99, 102, 241, 0.16), transparent 60%),
     radial-gradient(950px 700px at 86% 24%, rgba(34, 211, 238, 0.10), transparent 55%),
