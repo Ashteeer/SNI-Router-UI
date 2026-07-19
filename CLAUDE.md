@@ -87,7 +87,13 @@ Chromium and Firefox and stayed blank until a scroll invalidated the root (the
 "empty bg → gradient appears on scroll" bug; a `translateZ` compositor hint did
 **not** fix it). The body background always paints on the first frame, and `fixed`
 attachment keeps the glows viewport-anchored so a tall page has no hard scroll
-edge. **All visual tokens are CSS
+edge. **Caveat:** `body` is `height:100%` (one viewport), so below the first
+screen the glows exist only via body→canvas background propagation, which the
+spec enables **only while `html` has no background of its own** — index.html's
+anti-FOUC inline (`html,body{background:#080910}`) would kill it, so `style.css`
+overrides with `html{background:transparent}`. Removing that override brings back
+the "gradient ends after the first screen" bug on any scrollable page.
+**All visual tokens are CSS
 variables** in [`style.css`](frontend/src/style.css) (`--surface`, `--border`,
 `--accent`, `--glow`, `--radius`, …) — retune the whole look in one place. Reusable
 component classes (`.card` / `.card-hover`, `.btn-*`, `.input`, `.label`,

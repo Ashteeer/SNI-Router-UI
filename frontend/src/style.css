@@ -41,6 +41,12 @@ html, body, #app {
   margin: 0;
 }
 
+/* index.html pre-paints html/body #080910 inline (anti-FOUC). After the real CSS
+   loads, html must NOT keep a background of its own: body's aurora propagates to
+   the canvas (and thus covers pages taller than one screen — body is height:100%,
+   a single viewport) only while html's background stays transparent. */
+html { background: transparent; }
+
 body {
   color: var(--text);
   font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
