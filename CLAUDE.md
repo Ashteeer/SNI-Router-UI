@@ -80,11 +80,14 @@ stdlib script reading `/proc` — one per managed host.
 ### UI design system (v1.11.0 redesign)
 
 Dark-only **glassmorphism**: frosted `backdrop-blur` surfaces over an aurora
-gradient body, one indigo→violet accent, soft glows. The aurora is a viewport-fixed
-`.aurora` element (rendered once in `App.vue`) carrying `transform: translateZ(0)`
-so it gets its **own compositor layer and paints on the first frame** — a fixed,
-negative-`z-index` layer without that is painted lazily and only appears once a
-scroll invalidates the root (the "blank bg until you scroll" bug). **All visual tokens are CSS
+gradient body, one indigo→violet accent, soft glows. The aurora glows are painted
+**directly on `body`** (`background-image` + `background-attachment: fixed`), *not*
+a separate fixed `z-index:-1` layer — that layer was composited lazily by both
+Chromium and Firefox and stayed blank until a scroll invalidated the root (the
+"empty bg → gradient appears on scroll" bug; a `translateZ` compositor hint did
+**not** fix it). The body background always paints on the first frame, and `fixed`
+attachment keeps the glows viewport-anchored so a tall page has no hard scroll
+edge. **All visual tokens are CSS
 variables** in [`style.css`](frontend/src/style.css) (`--surface`, `--border`,
 `--accent`, `--glow`, `--radius`, …) — retune the whole look in one place. Reusable
 component classes (`.card` / `.card-hover`, `.btn-*`, `.input`, `.label`,
