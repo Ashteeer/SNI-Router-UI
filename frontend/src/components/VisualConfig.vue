@@ -30,7 +30,8 @@ const uses = {
 const TIMEOUT_HINTS = {
   handshake: 'Max seconds a client TLS handshake may take before the connection is dropped.',
   connect: 'Max seconds to open the TCP connection to a backend server.',
-  idle: 'Close a connection after this many seconds with no data in either direction.',
+  idle: 'Idle window for QUIC flows, and for every user-space read in terminate / terminate_tcp / redirect_https (TLS handshake, HTTP request + response). Plain UDP uses udp_idle instead; spliced passthrough is reaped by keepalive.',
+  udp_idle: 'Idle window for plain, non-QUIC UDP flows (DNS, syslog). Raise it only if a UDP protocol goes quiet for longer than 30s — WireGuard keepalives are 25s and fit as-is. QUIC never uses this value, so a small number cannot cut a long tunnel.',
   keepalive: 'Reaps connections whose peer vanished without a FIN — a NAT rebind or dead VPN client. 0 disables it.',
   health_interval: 'How often (seconds) the backend TCP health probe runs.',
   drain: 'On reload/restart, how long to let existing connections finish before they are closed.',
@@ -48,6 +49,48 @@ function ensure(obj, key, val) {
 function setNum(obj, key, v) {
   if (v === '' || v == null) delete obj[key]
   else obj[key] = Number(v)
+}
+
+// --- router version gate (config.md §5) -------------------------------------
+// `timeouts.udp_idle` landed in sni-router 1.8.0, and the router parses its
+// config with deny_unknown_fields — sending the key to a 1.7.x router fails the
+// whole PUT with a 400 and nothing is written. So we ask the router what it runs
+// and only show the field on >= 1.8.0; an unknown version (router unreachable)
+// counts as too old, which is the safe direction to be wrong in.
+const routerVer = ref(null)
+// numeric-segment compare, so 1.10.0 > 1.8.0 (a string compare gets that wrong)
+function verCmp(a, b) {
+  const pa = (String(a || '').match(/\d+/g) || []).map(Number)
+  const pb = (String(b || '').match(/\d+/g) || []).map(Number)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0)
+    if (d) return d < 0 ? -1 : 1
+  }
+  return 0
+}
+function routerAtLeast(v) { return routerVer.value != null && verCmp(routerVer.value, v) >= 0 }
+async function loadRouterVersion() {
+  if (!props.hostId) return
+  try { routerVer.value = (await api.routerVersion(props.hostId)).version || null }
+  catch { routerVer.value = null } // router down — hide version-gated fields
+}
+watch(() => props.hostId, (id) => { routerVer.value = null; if (id) loadRouterVersion() }, { immediate: true })
+
+// Visible timeout keys. Leaving udp_idle out here is also what keeps it out of
+// the saved YAML on an old router: the visual form is the only thing that would
+// ever add the key (a pre-1.8.0 router never sends it in GET /config).
+function timeoutKeys() {
+  const ks = ['handshake', 'connect', 'idle', 'keepalive', 'health_interval', 'drain']
+  if (routerAtLeast('1.8.0')) ks.splice(3, 0, 'udp_idle')
+  return ks
+}
+// inline validation for udp_idle (config.md §5): 0 is a hard error, > 300 a WARNING
+function timeoutNote(k) {
+  const v = k === 'udp_idle' ? props.model?.timeouts?.udp_idle : null
+  if (v == null || v === '') return null
+  if (Number(v) <= 0) return { msg: 'must be > 0 — the router rejects the config', cls: 'text-red-400' }
+  if (Number(v) > 300) return { msg: 'over 300s — the router warns; every idle flow holds a backend socket', cls: 'text-amber-400' }
+  return null
 }
 
 // listeners
@@ -148,6 +191,15 @@ function renameBackend(oldName, e) {
     for (const r of l.routes || []) if (r.backend === oldName) r.backend = nn
 }
 function delBackend(name) { delete props.model.backends[name] }
+// A backend reached by a `proto: udp` listener needs a receiver that speaks PROXY
+// protocol over UDP. There is no key for the framing — the router picks it per
+// flow (config.md §3.3) — so all the UI can do is say so.
+function udpProxyHint(name, be) {
+  const pp = be?.proxy_protocol
+  if (pp !== 'v1' && pp !== 'v2') return false
+  return (props.model?.listeners || []).some(
+    (l) => l.proto === 'udp' && (l.routes || []).some((r) => r.backend === name))
+}
 function addServer(be) { ensure(be, 'servers', []).push('') }
 // new rules default to a 404 catch-all (path "*") — a valid, common "deny the rest"
 function addRule(be) {
@@ -521,6 +573,18 @@ onBeforeUnmount(() => {
               </select>
             </div>
           </div>
+          <p v-if="udpProxyHint(name, be)"
+             class="mt-2 rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-300/90">
+            A <code>proto: udp</code> listener routes here, so the receiver must speak PROXY protocol
+            <b>over UDP</b>. Nothing to pick — the router frames it per flow: QUIC gets one header
+            as its own leading datagram, plain UDP gets a header on <b>every</b> datagram.
+            <br />
+            <b>Technitium DNS:</b> <i>Settings → Optional Protocols</i> → tick
+            <b>DNS-over-UDP-PROXY</b> (port 538 by default) and point <code>servers</code> at that
+            port, then add this router's IP to <b>Reverse Proxy Network ACL</b> on the same page.
+            That ACL defaults to empty and empty denies everyone — datagrams are dropped in
+            silence, with no log line.
+          </p>
 
           <div v-if="uses.health_check(be.mode)" class="mt-2 flex items-center gap-2">
             <input :id="'hc' + name" v-model="be.health_check" type="checkbox" />
@@ -655,10 +719,11 @@ onBeforeUnmount(() => {
       <div class="card">
         <h3 class="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">Timeouts (s)</h3>
         <div class="grid grid-cols-2 gap-3">
-          <div v-for="k in ['handshake', 'connect', 'idle', 'keepalive', 'health_interval', 'drain']" :key="k">
+          <div v-for="k in timeoutKeys()" :key="k">
             <label class="label flex items-center">{{ k }}<InfoTip :text="TIMEOUT_HINTS[k]" /></label>
             <input :value="model.timeouts?.[k]" type="number" class="input" placeholder="default"
               @input="setNum(ensure(model, 'timeouts', {}), k, $event.target.value)" />
+            <p v-if="timeoutNote(k)" class="mt-1 text-xs" :class="timeoutNote(k).cls">{{ timeoutNote(k).msg }}</p>
           </div>
         </div>
         <p class="mt-2 text-xs text-slate-500">
@@ -666,6 +731,18 @@ onBeforeUnmount(() => {
           peer vanished without a FIN — a NAT rebind, a dead VPN client. It matters here because
           passthrough splices in the kernel, so the router never sees the bytes and can't time them
           out itself; <code>0</code> disables it.
+        </p>
+        <p v-if="routerAtLeast('1.8.0')" class="mt-2 text-xs text-slate-500">
+          <code>udp_idle</code> (default 30) is the idle window for <b>plain</b> UDP — DNS, syslog.
+          QUIC keeps using <code>idle</code>, so a small value here can't cut a long HTTP/3 or
+          Hysteria tunnel. It exists because every UDP flow holds a backend socket and a resolver
+          takes a fresh source port per query: at 300 q/s a 300s window means ~90&nbsp;000 live
+          flows, the router's internal flow cap, and silently dropped queries.
+        </p>
+        <p v-else class="mt-2 text-xs text-slate-500">
+          <code>udp_idle</code> — a separate idle window for plain UDP — needs sni-router 1.8.0+,
+          so it's hidden here<span v-if="routerVer"> (this host runs {{ routerVer }})</span><span
+          v-else> (this host didn't report a version)</span>. Older routers reject the key outright.
         </p>
       </div>
       <div class="card">

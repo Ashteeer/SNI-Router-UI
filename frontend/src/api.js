@@ -56,6 +56,8 @@ export const api = {
   updateAgent: (id) => req('POST', `/hosts/${id}/agent-update`),
   updateRouter: (id) => req('POST', `/hosts/${id}/update`),
 
+  // the running sni-router's version, for gating version-specific config fields
+  routerVersion: (id) => req('GET', `/hosts/${id}/version`),
   status: (id) => req('GET', `/hosts/${id}/status`),
   live: (id) => req('GET', `/hosts/${id}/live`),
   history: (id, range) => req('GET', `/hosts/${id}/history?range=${range}`),

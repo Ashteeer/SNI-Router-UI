@@ -29,6 +29,8 @@ venv/
 
 # --- Node / frontend build ---
 node_modules/
+# no lockfile by design: install-site.sh runs a plain `npm install` on the target
+frontend/package-lock.json
 frontend/dist/
 frontend/.vite/
 npm-debug.log*

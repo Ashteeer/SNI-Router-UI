@@ -421,6 +421,28 @@ async def host_status(host_id: int, user=Depends(require_auth)):
         raise HTTPException(status_code=502, detail=f"host unreachable: {e}")
 
 
+@app.get("/api/hosts/{host_id}/version")
+async def host_router_version(host_id: int, user=Depends(require_auth)):
+    """The running sni-router's own version (config.md §8). The Configs tab gates
+    version-specific fields on it — `timeouts.udp_idle` only exists on >= 1.8.0
+    and the router rejects unknown keys, so sending it to an older build fails
+    the whole PUT. Falls back to /status for builds without /version."""
+    host = require_host(host_id)
+    last = None
+    for path in ("/version", "/status"):
+        try:
+            r = await collector.admin_request(host, "GET", path, timeout=6)
+            if r.status_code == 200:
+                ver = (r.json() or {}).get("version")
+                if ver:
+                    return {"version": ver}
+        except Exception as e:
+            last = e
+    if last is not None:
+        raise HTTPException(status_code=502, detail=f"host unreachable: {last}")
+    raise HTTPException(status_code=502, detail="router did not report a version")
+
+
 @app.get("/api/hosts/{host_id}/config")
 async def get_config(host_id: int, user=Depends(require_auth)):
     host = require_host(host_id)

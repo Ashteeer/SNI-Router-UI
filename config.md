@@ -118,6 +118,7 @@ unless a counter says otherwise — the defaults are sized for a reconnect burst
 | set by | `listen(2)` | `TCP_FASTOPEN` |
 | on overflow | **SYNs are dropped** — the client retries or fails | client silently falls back to a normal handshake (no failure) |
 | watch | `ss -tln` (Send-Q on the LISTEN row), `nstat -az TcpExtListenOverflows` | `nstat -az TcpExtTCPFastOpenListenOverflow` |
+| verify the value | `ss -tln` Send-Q | the startup log (see below) — **not** visible in `ss` |
 
 **Sizing.** A queue holds roughly `new_connections_per_sec × RTT` entries — it
 drains as fast as handshakes complete. At 1000 new conn/s and a 200 ms RTT that
@@ -134,6 +135,34 @@ queue only costs the client a round trip. Both are clamped by
   is a **warning** — the value is ignored.
 - Both are baked in before `listen()`, so changing either restarts in place
   (same as `bind`/`proto`).
+
+**Checking what is actually in effect.** `backlog` shows up as Send-Q on the
+LISTEN row of `ss -tln`. `fast_open_qlen` does **not** appear in `ss` at any
+verbosity — the kernel does not expose it through inet_diag — so the router
+reads it back with `getsockopt(TCP_FASTOPEN)` and logs it once per address at
+startup:
+
+```
+INFO tcp listener ready (fast_open active) addr=0.0.0.0:443 backlog=10240 fast_open_qlen=2048
+WARN fast_open_qlen was clamped by net.core.somaxconn requested=99999 effective=65535
+```
+
+That WARN is the case worth knowing about: the kernel silently clamps both
+queues to `net.core.somaxconn`, so a configured value can differ from the real
+one with nothing else to indicate it.
+
+Health of the TFO queue is in the kernel counters — `nstat -az | grep -i
+fastopen`:
+
+| counter | meaning |
+|---|---|
+| `TcpExtTCPFastOpenPassive` | connections accepted via TFO — rising means it works |
+| `TcpExtTCPFastOpenPassiveFail` | TFO attempts that failed (bad cookie, etc.) |
+| `TcpExtTCPFastOpenListenOverflow` | **the queue was full** — the only reason to raise `fast_open_qlen` |
+| `TcpExtTCPFastOpenCookieReqd` | clients asking for a cookie (first-time visitors) |
+
+Note these are host-wide, not per-listener: they cover every TFO socket on the
+machine.
 
 ### 2.5 `routes`
 
@@ -230,8 +259,37 @@ matrix](#38-field-applicability-by-mode)):
 
 Sends the real client address to the upstream (the only way to pass it in
 passthrough, where there are no HTTP headers). `none` | `v1` (text) | `v2`
-(binary). For UDP, the header is sent as its own leading datagram. Not relevant
-to `redirect_https`.
+(binary). Not relevant to `redirect_https`.
+
+**On TCP** the header is written once, before the first forwarded byte — the
+standard framing every implementation expects.
+
+**On UDP there are two framings, and the router picks the right one itself** —
+there is no config key, because for each transport only one of them works:
+
+| flow | framing | why |
+|---|---|---|
+| **QUIC** (`proto: udp` carrying an Initial packet) | one header, sent **once** as its own leading datagram; every datagram after it is byte-exact | the payload is AEAD-protected end to end — a single prepended byte and the backend's decryption fails |
+| **plain UDP** (DNS, syslog — anything on `proto: udp` that isn't QUIC) | the header is prepended to **every** datagram | datagrams are independent and carry no session state, so there is nowhere for a one-time header to live |
+
+The router already knows which it has (it parses the QUIC Initial to get the
+SNI), so it decides per flow: anything that ever looked like QUIC gets the
+leading-datagram form, everything else gets per-datagram headers.
+
+Backends that speak PROXY over UDP — Technitium's `DNS-over-UDP-PROXY`, dnsdist,
+HAProxy — parse a header at the front of *each* datagram and drop anything
+without one, so the per-datagram form is what makes them work.
+
+Receivers are expected to reply **without** a PROXY header, to the router's
+source address; that is what the router (and every other implementation) does,
+and the return path is untouched.
+
+> **Technitium checklist** — both live in *Settings → Optional Protocols*:
+> tick **DNS-over-UDP-PROXY** (default port 538) and point the backend's
+> `servers` at that port, then add the router's IP to **Reverse Proxy Network
+> ACL** on the same page. The ACL defaults to empty, and empty denies everyone —
+> a datagram from a non-listed IP is dropped in silence, header parsed
+> correctly, no log line.
 
 ### 3.4 `fast_open`
 
@@ -252,8 +310,8 @@ simply doesn't happen. Independent of `listeners[].fast_open`, which is about
 accepting client TFO. Ignored on the udp path (no TCP connect) and by
 `redirect_https` (no backend at all).
 
-Note this is a per-*connection* saving. For `http2: true` backends the pool
-(§3.9) usually matters more, since it removes the connect entirely.
+Note this is a per-*connection* saving. For terminate backends the pool
+(§3.9, §3.10) usually matters more, since it removes the connect entirely.
 
 ### 3.5 `balance` and `health_check`
 
@@ -307,7 +365,27 @@ replaced so they cannot be spoofed.
 | `x_forwarded_for`   | `X-Forwarded-For`    | appends client IP to any existing chain |
 | `x_forwarded_proto` | `X-Forwarded-Proto`  | `https` |
 
-### 3.9 HTTP/2 backend connections
+### 3.9 Connection lifetimes (terminate, HTTP/1.1)
+
+The client↔router connection and the router↔backend connection are **independent**,
+exactly as in nginx / HAProxy / Envoy. The client connection lives by the router's
+own timeouts (`idle` / `keepalive`) and is unaffected by the backend closing its
+side: when a backend ends its keep-alive connection (its own idle timeout, an EOF,
+an error), the router transparently opens a new backend connection for the next
+request rather than dropping the client. An idempotent request (GET, HEAD, OPTIONS,
+TRACE, DELETE, PUT — with no body) whose backend connection was already dead is
+retried once on a fresh connection; a request that can't be safely replayed gets a
+`502` while the client connection stays open. Backend connections are pooled and
+reused across client connections the same way the HTTP/2 path does (see below), so
+this costs no extra connects in steady state.
+
+The backend's own `Connection` header governs only the backend hop — it is stripped
+from the response and never relayed, so a backend answering `Connection: close`
+does not close the *client's* keep-alive. (A response delimited by the backend
+closing the connection — no `Content-Length`, not chunked — is the one case where
+the client is told to close too, because that framing has no other end marker.)
+
+### 3.10 HTTP/2 backend connections
 
 With `http2: true` the router terminates h2 from the client and speaks HTTP/1.1
 to `servers`, mapping each multiplexed stream to one backend request.
@@ -332,7 +410,7 @@ Remaining limits: the backend is spoken to as **plaintext HTTP/1.1** (`http2`
 is not combinable with `backend_tls`), `least_conn` does not count h2 streams,
 and server push / trailers are not forwarded.
 
-### 3.10 Field applicability by mode
+### 3.11 Field applicability by mode
 
 `Y` = used, `—` = ignored (a WARNING is emitted if set), `req` = required.
 
@@ -416,13 +494,36 @@ http_rules:
 |-------------------|------|---------|-------|
 | `handshake`       | int  | `5`     | max time to read the full ClientHello (slowloris protection) |
 | `connect`         | int  | `10`    | backend connect timeout |
-| `idle`            | int  | `300`   | idle timeout (UDP flows; TLS data phase) |
+| `idle`            | int  | `300`   | idle read timeout: **QUIC** flows, and every user-space read in `terminate` / `terminate_tcp` / `redirect_https` (TLS handshake + HTTP request/response). Passthrough (`splice`) and established raw/WebSocket tunnels are reaped by `keepalive` instead |
+| `udp_idle`        | int  | `30`    | idle window for **plain UDP** flows (DNS, syslog — anything on a `proto: udp` listener that isn't QUIC); see below |
 | `keepalive`       | int  | `60`    | TCP keepalive idle time; `0` = off; see below |
 | `health_interval` | int  | `10`    | how often health‑check probes run |
 | `drain`           | int  | `30`    | on SIGTERM, how long to wait for active connections before exit |
 
 All must be `> 0` (error otherwise), except `keepalive`, where `0` means
-disabled. Values `> 86400` (24h) produce a WARNING.
+disabled. Values `> 86400` (24h) produce a WARNING; `udp_idle > 300` produces one
+too.
+
+### 5.0 `udp_idle` vs `idle` on a UDP listener
+
+Both cover `proto: udp`, and the router picks between them per flow by what the
+first datagrams actually were:
+
+| flow | timeout | why |
+|---|---|---|
+| QUIC (a decryptable — or merely QUIC-shaped — Initial was seen) | `idle` | a QUIC session is allowed to go quiet for minutes; Hysteria, HTTP/3 and friends must not be cut |
+| plain UDP (never looked like QUIC) | `udp_idle` | one request, one response — there is no session to keep |
+
+The split exists because a UDP flow costs a backend socket. A resolver takes a
+**fresh ephemeral port per query** (Windows always does), so with a 300s window
+a DNS listener at 300 q/s would hold ~90 000 live flows and sockets, hit the
+internal flow cap, and start dropping queries. At 30s the same load sits near
+9 000.
+
+Raise `udp_idle` if you pass a non-QUIC protocol that stays silent between
+packets for longer than 30s and cares about keeping the same backend 4‑tuple
+(WireGuard's default persistent keepalive is 25s and fits as-is). Lowering
+`idle` is never needed to control DNS flow count — that is what this key is for.
 
 ### 5.1 `keepalive`
 
@@ -485,7 +586,7 @@ Reads (need the token when one is configured — the installer always sets one):
 |-----------------|---------|-------|
 | `GET /healthz`  | `ok`    | liveness |
 | `GET /status`   | JSON    | version, uptime, listeners, backends |
-| `GET /config`   | YAML    | the running config; `api.token` redacted |
+| `GET /config`   | YAML    | the running config; `api.token` redacted. Sends an `ETag` header (a hash of the config) for optimistic concurrency — pass it back as `If-Match` on `PUT /config` |
 | `GET /metrics`  | text    | Prometheus exposition: global counters (connections, bytes, errors, rate‑limited, UDP flows, h2 pool hits) and per‑backend series |
 | `GET /version`  | JSON    | `{"version":"1.4.0"}` — the running binary's version |
 
@@ -494,7 +595,7 @@ can't be changed unauthenticated):
 
 | method + path   | body        | effect |
 |-----------------|-------------|--------|
-| `PUT /config`   | YAML config | validate → atomically replace the config file → apply. Invalid config → `400` with a JSON error list, **nothing is written**. The body **must include `api.token`** while one is configured (`GET /config` redacts it, so a blind GET→PUT round‑trip is rejected with `400` instead of silently disabling auth). |
+| `PUT /config`   | YAML config | validate → atomically replace the config file → apply. Invalid config → `400` with a JSON error list, **nothing is written**. The body **must include `api.token`** while one is configured (`GET /config` redacts it, so a blind GET→PUT round‑trip is rejected with `400` instead of silently disabling auth). Optional `If-Match: <etag>` (the value from `GET /config`) makes the write conditional: if the config changed since it was read, it's rejected with `409 Conflict` instead of clobbering the other edit — so two web‑UI sessions can't lost‑update each other. `If-Match: *` (or no header) writes unconditionally. |
 | `POST /reload`  | —           | re‑read the config file from disk and apply it (like SIGHUP). |
 | `POST /restart` | —           | validate the on‑disk config, then re‑exec the process (drops connections, rebinds immediately). Privilege‑free equivalent of `systemctl restart`. |
 | `POST /update`  | —           | check GitHub for a newer release; if one exists, download it, replace the binary, and re‑exec into it. See below. |
@@ -510,7 +611,10 @@ poll `GET /version` to confirm the new version is live):
 
 The update only ever fetches this project's **official** GitHub release assets
 (the repo is compiled in, never taken from the request), so it can only install an
-official build. It needs write access to the directory the binary lives in — the
+official build. The download is verified against the release's `SHA256SUMS`
+manifest before it replaces the running binary — a mismatch (or a release without
+the manifest) aborts the update, so a swapped asset or a transport MITM can't
+install a tampered binary. It needs write access to the directory the binary lives in — the
 installer puts the binary under `/usr/local/lib/sni-router/` owned by the service
 user for exactly this reason (with a `/usr/local/bin/sni-router` symlink on PATH).
 The same logic backs the CLI: `sni-router -u` (`--update`, add `--force` to
@@ -711,7 +815,7 @@ Config {
   listeners?: Listener[]                      // may be empty (API-only config)
   backends?: { [name: string]: Backend }      // may be empty (API-only config)
   default_tls?: { cert: string, key: string } // shared cert for terminate backends
-  timeouts?: { handshake, connect, idle, keepalive, health_interval, drain } // ints, seconds
+  timeouts?: { handshake, connect, idle, udp_idle, keepalive, health_interval, drain } // ints, seconds
   limits?: { max_client_hello, max_conns_per_ip }                   // ints
   log?: { level: enum, format: enum }
   api?: { bind: string, token?: string, tls?: { cert: string, key: string } }

@@ -182,7 +182,7 @@ systemd units: `backend/sni-router-ui.service`, `agent/sni-router-agent.service`
 | `GET /version` (`?force=1` skips 1h cache) · `POST /update/ui` | UI+router latest-check · self-update |
 | `POST /provision` | clean-install agent/router over SSH (`targets`, opt. `host_id`) |
 | `GET /hosts` · `POST /hosts` · `PUT /hosts/{id}` · `DELETE /hosts/{id}` · `POST /hosts/delete` | host CRUD (PUT = edit; incl. `agent_ip`) |
-| `GET /hosts/{id}/status` · `/live` · `/history?range=1h\|6h\|24h\|48h` · `/agent` · `/certcheck?path=` · `/tfo` · `/netstat` | metrics · agent `/sys` (IPs+version) · TLS cert/key check · host TFO sysctl status · curated kernel TcpExt counters, all via the agent |
+| `GET /hosts/{id}/status` · `/live` · `/version` · `/history?range=1h\|6h\|24h\|48h` · `/agent` · `/certcheck?path=` · `/tfo` · `/netstat` | metrics · running router version (proxies router `GET /version`, falls back to `/status`) · agent `/sys` (IPs+version) · TLS cert/key check · host TFO sysctl status · curated kernel TcpExt counters, all via the agent |
 | `POST /hosts/{id}/tfo` | ask the agent to enable `net.ipv4.tcp_fastopen = 3` on the host |
 | `GET/PUT /hosts/{id}/config` · `POST /hosts/{id}/reload\|restart\|update\|agent-update` | config control · router self-update (proxies router `POST /update`) · agent self-update |
 
@@ -235,6 +235,16 @@ so even a read-only-admin build works.
   row/status dots bind live, mobile (375px) has no horizontal scroll and shows
   the bottom tab bar + card list. Pixel screenshots weren't captured (headless
   pane freezes rAF/paint) — verified via DOM + computed styles instead.
+- [x] **v1.12.0 sni-router 1.8.0 support** built (`vite build`, clean) and tested
+  against a stub admin API on Windows (venv backend + fake router serving
+  `/version` `/status` `/config` `/metrics`): at **1.8.0** and **1.10.0** the
+  `udp_idle` field renders and saves (`udp_idle: 45` reached the router's
+  `PUT /config`); at **1.7.5** it is absent from the form *and* from the PUT body;
+  with the router down it stays hidden. Inline validation verified live
+  (`0` -> red "must be > 0", `500` -> amber ">300s"), and the PROXY-over-UDP note
+  shows on the `dns` backend (udp listener + `proxy_protocol: v2`) but not on the
+  tcp-only `web` backend. `GET /api/hosts/{id}/version` falls back to `/status`
+  when the router has no `/version` (verified with the endpoint 404ing).
 - [ ] **Not yet end-to-end tested:** installers (`scripts/*.sh`), local config
   editing (Settings), and SSH remote provisioning. Rebuild the frontend
   (`npm run build`) before shipping — the git tarball carries no `dist/`.
@@ -268,10 +278,40 @@ so even a read-only-admin build works.
   to silently serialize an invalid `0`.
 - **`timeouts.keepalive`** (config.md §5.1, default 60, `0` = off) — the only
   timeout where `0` is legal.
-- **HTTP/2 backend pooling** (config.md §3.9) has nothing to configure; the UI
+- **`timeouts.udp_idle`** (config.md §5.0, new in sni-router **1.8.0**, default 30)
+  — the idle window for **plain** (non-QUIC) UDP flows: DNS, syslog. `idle` now
+  covers **QUIC** flows plus the user-space reads in
+  `terminate`/`terminate_tcp`/`redirect_https`; the router picks per flow by
+  whether it ever saw a QUIC Initial. Inline validation: `0` is a hard error,
+  `> 300` earns the router's WARNING (each live flow holds a backend socket, and
+  a resolver takes a fresh source port per query — that is the whole reason the
+  key was split out of `idle`).
+- **Version gate** — the router parses its config with `deny_unknown_fields`, so
+  `udp_idle` on a 1.7.x router **400s the entire `PUT`** and nothing is written.
+  `VisualConfig` therefore fetches `GET /api/hosts/{id}/version` on every host
+  switch and only lists `udp_idle` in `timeoutKeys()` at `>= 1.8.0`; an
+  unreachable router (version `null`) counts as *too old*. Comparison is
+  numeric-segment (`verCmp`), not string — `1.10.0 > 1.8.0`. Hiding the field is
+  also what keeps the key out of the saved YAML: a pre-1.8.0 router never returns
+  it from `GET /config`, so the visual form is the only thing that could add it.
+  (Manual YAML stays raw by design.)
+- **PROXY protocol over UDP** (config.md §3.3) has **no config key** — the router
+  frames it per flow (QUIC: one leading header datagram; plain UDP: a header on
+  *every* datagram). The UI shows an amber note on any backend with
+  `proxy_protocol: v1|v2` that a `proto: udp` listener routes to, including the
+  Technitium checklist (*Optional Protocols* → DNS-over-UDP-PROXY on 538 **and**
+  the router's IP in *Reverse Proxy Network ACL*, which defaults to empty and
+  empty denies everyone — datagrams vanish with no log line).
+- **HTTP/2 backend pooling** (config.md §3.10) has nothing to configure; the UI
   just points at `sni_router_h2_pool_hits_total` when `http2` is ticked.
+  HTTP/1.1 terminate backends are pooled too (config.md §3.9) — also nothing to
+  configure.
 - Needs **sni-router ≥ 1.6.0** — older builds reject `backlog` /
-  `fast_open_qlen` / backend `fast_open` as unknown fields.
+  `fast_open_qlen` / backend `fast_open` as unknown fields. `udp_idle` needs
+  ≥ **1.8.0** and is version-gated (above); everything else degrades gracefully.
+- The UI does **not** parse sni-router's access log, so 1.8.0's new
+  `mode="udp"` (vs the previous always-`quic` for UDP flows) needs no change
+  here — noted so a future log viewer accounts for both values.
 - **HTTP rules**: a per-rule *type* select with two zero/one-field presets —
   `301 → https/custom port` (sets `action:redirect status:301`, one `to` field:
   `https` for same-host:443, or a full URL for a custom port) and `404 Not Found`
