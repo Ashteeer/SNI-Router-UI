@@ -31,7 +31,7 @@ import sys
 import time
 import urllib.parse
 
-AGENT_VERSION = "1.12.0"
+AGENT_VERSION = "1.13.0"
 CONF_PATH = os.environ.get("SNI_AGENT_CONF", "/etc/sni-router-agent/agent.conf")
 
 

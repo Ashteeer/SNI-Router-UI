@@ -17,7 +17,10 @@ const loadErr = ref('')
 const result = ref(null)
 const busy = ref('')
 const ips = ref([])
+const visualInvalid = ref(false)   // Visual form found a hard error -> block Save
 let applying = false
+// restart signature of the config as loaded, to warn before a save that re-execs
+let baseSig = null
 
 // Drop null/undefined so an absent section (e.g. `tls`) round-trips as *nothing*
 // rather than the literal `tls: null`, which sni-router would reject on save.
@@ -35,6 +38,33 @@ function clean(v) {
 }
 function dump(m) {
   return jsyaml.dump(clean(m) ?? {}, { lineWidth: -1, noRefs: true, sortKeys: false })
+}
+
+// Parts of the config sni-router can't hot-swap: changing any of them makes
+// `PUT /config` answer {applied:"restart", downtime:true} and re-exec the router,
+// dropping every active connection (config.md §6.5 / §11). Listener binds are
+// compared as a set so a pure drag-reorder doesn't raise a false alarm.
+const SIG_PARTS = {
+  listeners: (m) => (m.listeners || [])
+    .map((l) => JSON.stringify([l.bind, l.proto || 'tcp', !!l.fast_open, l.backlog ?? null, l.fast_open_qlen ?? null]))
+    .sort(),
+  'backend certs': (m) => Object.entries(m.backends || {}).map(([n, b]) => [n, b?.tls || null]).sort(),
+  default_tls: (m) => m.default_tls || null,
+  api: (m) => m.api || null,
+  log: (m) => m.log || null,
+  runtime: (m) => m.runtime || null,
+}
+function restartSig(m) {
+  if (!m) return null
+  const out = {}
+  for (const [k, get] of Object.entries(SIG_PARTS)) out[k] = JSON.stringify(get(m))
+  return out
+}
+// which restart-signature parts differ from the config we loaded
+function restartChanges() {
+  const now = restartSig(model.value)
+  if (!baseSig || !now) return []
+  return Object.keys(SIG_PARTS).filter((k) => baseSig[k] !== now[k])
 }
 
 function applyText(text) {
@@ -60,6 +90,7 @@ async function load() {
     applyText(text)
     // re-emit through the null-stripping dumper so the manual view starts clean
     if (!parseErr.value && model.value) yamlText.value = dump(model.value)
+    baseSig = restartSig(model.value)
   } catch (e) {
     loadErr.value = e.message
   }
@@ -92,10 +123,16 @@ watch(() => props.hostId, () => { load(); loadIps() })
 onMounted(() => { load(); loadIps() })
 
 async function save() {
+  const changed = restartChanges()
+  if (changed.length && !confirm(
+    'These changes can\'t be hot-swapped: ' + changed.join(', ') + '.\n\n' +
+    'The router will re-exec to apply them and every active connection will drop.\n\nSave anyway?'
+  )) return
   busy.value = 'save'
   result.value = null
   try {
     result.value = { ok: true, ...(await api.putConfig(props.hostId, yamlText.value)) }
+    baseSig = restartSig(model.value) // saved: this is the new "as running" state
   } catch (e) {
     result.value = { ok: false, ...(e.data && typeof e.data === 'object' ? e.data : { error: e.message }) }
   } finally {
@@ -141,7 +178,8 @@ const currentHost = () => props.hosts.find((h) => h.id === props.hostId)
       </div>
       <div class="flex flex-1 items-center justify-end gap-2 sm:flex-none">
         <button class="btn-ghost" :disabled="!!busy" @click="load">Reload</button>
-        <button class="btn-primary" :disabled="busy || !!parseErr" @click="save">
+        <button class="btn-primary" :disabled="busy || !!parseErr || visualInvalid" @click="save"
+          :title="visualInvalid ? 'Fix the highlighted fields first — the router would reject the whole config' : ''">
           {{ busy === 'save' ? 'Saving…' : 'Save' }}
         </button>
         <button class="btn-danger" :disabled="busy || !currentHost()?.has_token" @click="restart"
@@ -152,6 +190,9 @@ const currentHost = () => props.hosts.find((h) => h.id === props.hostId)
     </div>
 
     <p v-if="loadErr" class="mb-4 rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-400">{{ loadErr }}</p>
+    <p v-if="visualInvalid" class="mb-4 rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+      A field in the Visual form is out of range — the router would reject the whole config, so Save is disabled.
+    </p>
     <p v-if="parseErr" class="mb-4 rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-sm text-amber-400">
       YAML parse error: {{ parseErr }} — the visual view is paused until it's valid.
     </p>
@@ -174,7 +215,8 @@ const currentHost = () => props.hosts.find((h) => h.id === props.hostId)
     <p v-if="!hosts.length" class="text-slate-500">No hosts. Add one in the Hosts tab.</p>
 
     <div v-else>
-      <VisualConfig v-show="subtab === 'visual'" :model="model" :host-id="hostId" />
+      <VisualConfig v-show="subtab === 'visual'" :model="model" :host-id="hostId"
+        @invalid="visualInvalid = $event" />
       <div v-show="subtab === 'manual'" class="h-[70vh]">
         <Editor :model-value="yamlText" @update:model-value="onEditorInput" />
       </div>

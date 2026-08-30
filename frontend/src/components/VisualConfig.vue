@@ -93,6 +93,103 @@ function timeoutNote(k) {
   return null
 }
 
+// --- runtime / performance (config.md §6.5, sni-router 1.9.0) --------------
+// Four optional ints that tune the passthrough data path. None of them can add
+// latency — the router never waits for a chunk to fill — they trade syscalls
+// for memory on bulk traffic. Every field needs a RESTART, so Configs.vue
+// confirms before saving when the section changed.
+const RUNTIME_KEYS = ['io_uring_entries', 'splice_chunk', 'pipe_size', 'splice_spin']
+const RUNTIME_DEFAULTS = { io_uring_entries: 4096, splice_chunk: 65536, pipe_size: 65536, splice_spin: 8 }
+const RUNTIME_BYTES = { splice_chunk: true, pipe_size: true }
+// Hints follow the router doc's wording. The "ceiling, not a wait" part is the
+// one that matters: read as "bigger buffer = more lag", these get tuned backwards.
+const RUNTIME_HINTS = {
+  io_uring_entries: 'io_uring queue depth per CPU core. Every direction of every live connection takes one slot; when slots run out the kernel falls back to a slower path. The kernel rounds the value up to a power of two. Memory: roughly 96 bytes per slot per core — 4096 slots is about 400 KiB per core.',
+  splice_chunk: 'Maximum bytes the router moves in one go. A ceiling, not a wait: it never waits for a full chunk to gather — one byte in, one byte straight out. Raising it only affects bulk traffic: a megabyte costs 1 MiB / splice_chunk trips into the kernel. Setting it higher than pipe_size is pointless.',
+  pipe_size: 'Size of the intermediate pipe the kernel moves bytes through. Technically required: splice cannot carry data from socket straight to socket. Must be at least splice_chunk, otherwise raising splice_chunk does nothing. Ask for more than the system allows (fs.pipe-max-size) and the kernel silently refuses and keeps the default — the router logs the real value at startup on the "data path ready" line.',
+  splice_spin: 'How many times in a row one connection may move data before it yields the CPU core to the others. Lower is fairer with many connections; higher means fewer switches with a few very busy ones. Above 64 is not worth it: neighbouring connections on the same core start waiting.',
+}
+const RUNTIME_PRESETS = [
+  { id: 'default', label: 'Defaults', desc: 'What the router uses with no runtime section at all. Fits almost everyone.',
+    v: { io_uring_entries: 4096, splice_chunk: 65536, pipe_size: 65536, splice_spin: 8 } },
+  { id: 'conns', label: 'Many connections', desc: 'Thousands of concurrent clients, small packets (VPN, DNS, games). More ring slots, fewer rounds in a row per connection so nobody waits on anybody.',
+    v: { io_uring_entries: 16384, splice_chunk: 32768, pipe_size: 65536, splice_spin: 2 } },
+  { id: 'bulk', label: 'High throughput', desc: 'Dozens of clients each pulling gigabytes (files, video, mirrors). Bigger chunk and pipe, more rounds in a row: fewer trips into the kernel for the same volume.',
+    v: { io_uring_entries: 8192, splice_chunk: 262144, pipe_size: 262144, splice_spin: 32 } },
+]
+// Pipe pages are charged against fs.pipe-user-pages-soft (64 MiB by default) and
+// a passthrough connection holds TWO pipes — one per direction (config.md §6.5).
+const PIPE_USER_BUDGET = 64 * 1024 * 1024
+const PIPE_MAX_SIZE = 1048576 // typical fs.pipe-max-size; a given host may differ
+
+function humanBytes(n) {
+  n = Number(n)
+  if (!Number.isFinite(n) || n <= 0) return ''
+  if (n % 1048576 === 0) return (n / 1048576) + ' MiB'
+  if (n % 1024 === 0) return (n / 1024) + ' KiB'
+  return n + ' B'
+}
+function isPow2(n) { return n > 0 && (n & (n - 1)) === 0 }
+function nextPow2(n) { let p = 1; while (p < n) p *= 2; return p }
+function rtVal(k) {
+  const v = props.model?.runtime?.[k]
+  return v === '' || v == null ? null : Number(v)
+}
+// effective pipe size for the splice_chunk comparison: unset or 0 = kernel default
+function pipeEff() {
+  const v = rtVal('pipe_size')
+  return v == null || v === 0 ? RUNTIME_DEFAULTS.pipe_size : v
+}
+// Empty = omit the key (setNum), and an empty section is dropped entirely so the
+// YAML never carries a bare `runtime: {}`.
+function setRuntime(k, v) {
+  const rt = ensure(props.model, 'runtime', {})
+  setNum(rt, k, v)
+  if (!Object.keys(rt).length) delete props.model.runtime
+}
+function applyPreset(p) {
+  const rt = ensure(props.model, 'runtime', {})
+  for (const k of RUNTIME_KEYS) rt[k] = p.v[k]
+}
+function clearRuntime() { delete props.model.runtime }
+
+// config.md §6.5 validation table. 'err' blocks the save (the router would 400
+// the whole PUT and write nothing); 'warn' is shown but still saveable.
+function runtimeNote(k) {
+  const v = rtVal(k)
+  if (v == null || Number.isNaN(v)) return null
+  if (k === 'io_uring_entries') {
+    if (v <= 0) return { lv: 'err', msg: 'must be > 0 — the router rejects the config' }
+    if (v > 32768) return { lv: 'err', msg: 'over 32768 — io_uring will not come up and the worker never starts' }
+    if (v < 256) return { lv: 'warn', msg: 'under 256 — the router raises it to 256' }
+    if (!isPow2(v)) return { lv: 'warn', msg: 'not a power of two — the kernel rounds up to ' + nextPow2(v) }
+  }
+  if (k === 'splice_chunk') {
+    if (v <= 0) return { lv: 'err', msg: 'must be > 0 — the router rejects the config' }
+    if (v < 4096) return { lv: 'warn', msg: 'under 4096 — below one page the trips into the kernel stop paying off' }
+    if (v > pipeEff()) return { lv: 'warn', msg: 'larger than pipe_size (' + humanBytes(pipeEff()) + ') — the move still stops at the pipe' }
+  }
+  if (k === 'pipe_size') {
+    if (v < 0) return { lv: 'err', msg: 'must be 0 or more (0 = keep whatever the kernel gives)' }
+    if (v > PIPE_MAX_SIZE) return { lv: 'warn', msg: 'above the usual fs.pipe-max-size (1 MiB) — the kernel refuses and silently keeps the default size' }
+    if (v > 65536) return { lv: 'warn', msg: 'about ' + Math.floor(PIPE_USER_BUDGET / (v * 2)) + ' passthrough connections get this size before the pipe budget (fs.pipe-user-pages-soft, 64 MiB) runs out; after that the kernel silently hands out minimal pipes. Need both? Raise fs.pipe-user-pages-soft on the server.' }
+  }
+  if (k === 'splice_spin') {
+    if (v < 0) return { lv: 'err', msg: 'must be 0 or more (0 behaves like 1)' }
+    if (v > 64) return { lv: 'warn', msg: 'above 64 — neighbouring connections on the same core start waiting' }
+  }
+  return null
+}
+function noteClass(n) { return n.lv === 'err' ? 'text-red-400' : 'text-amber-400' }
+// Errors disable Save in the parent; warnings never do.
+function runtimeHasError() {
+  if (!routerAtLeast('1.9.0')) return false
+  return RUNTIME_KEYS.some((k) => runtimeNote(k)?.lv === 'err')
+}
+const emit = defineEmits(['invalid'])
+watch([() => props.model?.runtime, routerVer],
+  () => emit('invalid', runtimeHasError()), { deep: true, immediate: true })
+
 // listeners
 function addListener() {
   ensure(props.model, 'listeners', [])
@@ -762,6 +859,52 @@ onBeforeUnmount(() => {
         <input :value="model.api?.token" class="input" placeholder="Bearer token"
           @input="ensure(model, 'api', {}).token = $event.target.value" />
       </div>
+      <!-- Performance (runtime) — sni-router 1.9.0+, config.md §6.5 -->
+      <div class="card">
+        <h3 class="mb-1 text-sm font-semibold uppercase tracking-wide text-slate-400">Performance</h3>
+        <template v-if="routerAtLeast('1.9.0')">
+          <p class="mb-3 text-xs text-slate-500">
+            Tuning for the passthrough data path (<code>runtime</code>). <b>None of these can add
+            latency</b> — the router never waits for a buffer to fill, a byte that arrived leaves
+            immediately. They trade trips into the kernel for memory on bulk traffic. Empty = the
+            router's default. <b>Every field here needs a restart</b>: saving re-execs the router
+            and drops all active connections.
+          </p>
+          <div class="mb-3 flex flex-wrap items-center gap-2">
+            <button v-for="p in RUNTIME_PRESETS" :key="p.id" class="btn-ghost" :title="p.desc"
+              @click="applyPreset(p)">{{ p.label }}</button>
+            <button class="btn-ghost text-slate-500" title="Remove the runtime section entirely — back to the router's built-in defaults"
+              @click="clearRuntime">Clear</button>
+          </div>
+          <ul class="mb-3 space-y-1 text-xs text-slate-500">
+            <li v-for="p in RUNTIME_PRESETS" :key="p.id"><b class="text-slate-400">{{ p.label }}</b> — {{ p.desc }}</li>
+          </ul>
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div v-for="k in RUNTIME_KEYS" :key="k">
+              <label class="label flex items-center">
+                {{ k }}<span v-if="RUNTIME_BYTES[k]" class="ml-1 normal-case text-slate-600">(bytes)</span>
+                <InfoTip :text="RUNTIME_HINTS[k]" />
+              </label>
+              <input :value="model.runtime?.[k]" type="number" class="input"
+                :placeholder="String(RUNTIME_DEFAULTS[k])"
+                @input="setRuntime(k, $event.target.value)" />
+              <p v-if="RUNTIME_BYTES[k] && humanBytes(model.runtime?.[k])" class="mt-1 text-xs text-slate-500">
+                = {{ humanBytes(model.runtime?.[k]) }}
+              </p>
+              <p v-if="runtimeNote(k)" class="mt-1 text-xs" :class="noteClass(runtimeNote(k))">
+                {{ runtimeNote(k).msg }}
+              </p>
+            </div>
+          </div>
+        </template>
+        <p v-else class="text-xs text-slate-500">
+          The <code>runtime</code> section (io_uring depth, splice chunk, pipe size, fairness)
+          needs sni-router 1.9.0+, so it's hidden here<span v-if="routerVer"> (this host runs
+          {{ routerVer }})</span><span v-else> (this host didn't report a version)</span>.
+          Older routers reject the whole config with a 400 — nothing would be written.
+        </p>
+      </div>
+
       <div class="card">
         <h3 class="mb-1 text-sm font-semibold uppercase tracking-wide text-slate-400">Default TLS</h3>
         <p class="mb-3 text-xs text-slate-500">

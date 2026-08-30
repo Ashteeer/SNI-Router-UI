@@ -144,7 +144,9 @@ The **Settings** tab also edits the IP whitelist (IPs/CIDRs that skip login).
 - **Configs** — pick a host, edit its config as a **Visual** form or **Manual**
   YAML (CodeMirror), kept in sync; Save (`PUT /config`) and Restart go straight
   to that host's admin API. Fields the host's router is too old for are hidden
-  and never sent (e.g. `timeouts.udp_idle` needs sni-router 1.8.0+).
+  and never sent (`timeouts.udp_idle` needs sni-router 1.8.0+, the
+  **Performance** / `runtime` card needs 1.9.0+). A save that forces the router
+  to re-exec asks first.
 - **Settings** — edit the site's local config + IP whitelist.
 
 ---

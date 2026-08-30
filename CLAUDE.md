@@ -23,8 +23,11 @@ current.
 - **Configs** — pick a host, edit its config in a **Visual** form or a **Manual**
   YAML editor (CodeMirror). The two stay in sync. Save (`PUT /config`) and
   Restart (`POST /restart`) go straight to that host's admin API. Visual covers
-  `default_tls` (shared cert) and `log.level`; the header shows the host's IPs.
-  Absent sections are stripped (never serialized as `key: null`) before save.
+  `default_tls` (shared cert), `log.level` and **Performance** (`runtime`); the
+  header shows the host's IPs. Absent sections are stripped (never serialized as
+  `key: null`) before save. A save that changes the router's **restart
+  signature** asks for confirmation first (it re-execs and drops every live
+  connection).
 - **Settings** — change the **admin login/password** (no old-password check — the
   session is already authed), edit the site's **local** config (`ui.conf`) + IP
   whitelist.
@@ -245,6 +248,19 @@ so even a read-only-admin build works.
   shows on the `dns` backend (udp listener + `proxy_protocol: v2`) but not on the
   tcp-only `web` backend. `GET /api/hosts/{id}/version` falls back to `/status`
   when the router has no `/version` (verified with the endpoint 404ing).
+- [x] **v1.13.0 sni-router 1.9.0 support** (`runtime`) built (`vite build`,
+  clean) and tested on Windows against two stub admin APIs (venv backend + fake
+  routers on :9901 reporting 1.9.0 and :9902 reporting 1.8.0): on **1.9.0** the
+  Performance card renders, the *High throughput* preset fills all four fields,
+  `256 KiB` + the "~128 connections" pipe-budget warning show, and Save reaches
+  the router with `runtime:` in the PUT body after confirming
+  "can't be hot-swapped: runtime" (`{"applied":"restart","downtime":true}`).
+  Every §3 validation row was exercised live (`io_uring_entries` 0 / 200 / 3000
+  / 40000, `splice_chunk` 0 / 2048 / 1 MiB vs pipe, `pipe_size` 128 KiB / 2 MiB,
+  `splice_spin` 100) — errors disabled Save, warnings did not. On **1.8.0** the
+  card is replaced by the "needs 1.9.0+" note and the PUT body carries no
+  `runtime` key. The confirm fires on a `log.level` change and stays quiet on a
+  `servers` edit.
 - [ ] **Not yet end-to-end tested:** installers (`scripts/*.sh`), local config
   editing (Settings), and SSH remote provisioning. Rebuild the frontend
   (`npm run build`) before shipping — the git tarball carries no `dist/`.
@@ -286,14 +302,43 @@ so even a read-only-admin build works.
   `> 300` earns the router's WARNING (each live flow holds a backend socket, and
   a resolver takes a fresh source port per query — that is the whole reason the
   key was split out of `idle`).
+- **`runtime` — "Performance" card** (config.md §6.5, new in sni-router **1.9.0**)
+  — four optional ints on the TCP passthrough data path: `io_uring_entries`
+  (ring depth per core), `splice_chunk` (bytes moved per go), `pipe_size` (the
+  intermediate pipe `splice` needs) and `splice_spin` (rounds before a
+  connection yields its core). Defaults show as **placeholders**, so the section
+  can stay absent; an empty section is deleted rather than dumped as
+  `runtime: {}`. Byte fields print a human size (`262144` → `256 KiB`). Three
+  preset buttons (Defaults / Many connections / High throughput, values in
+  config.md §6.5) plus **Clear**. Inline validation follows the router's table:
+  `io_uring_entries` `0` or `> 32768` and `splice_chunk: 0` are **errors that
+  disable Save** (the router would 400 the whole PUT), the rest are amber
+  warnings — under 256 / not a power of two, `splice_chunk` under 4096 or above
+  `pipe_size`, `pipe_size` over ~`fs.pipe-max-size`. The **key hint** is that
+  none of these can add latency (the router never waits for a chunk to fill) —
+  read as "bigger buffer = more lag", they get tuned backwards.
+- **Pipe budget warning** — a passthrough connection holds **two** pipes and
+  their pages count against `fs.pipe-user-pages-soft` (64 MiB default); past it
+  the kernel silently hands out minimal pipes. So any `pipe_size > 64 KiB` shows
+  the computed number of connections that still get the full size (256 KiB →
+  ~128) and points at raising the sysctl.
+- **Restart-signature confirm** (`Configs.vue`, `SIG_PARTS`) — sni-router
+  hot-swaps routes/backends/timeouts but **re-execs** for listener
+  `bind`/`proto`/`fast_open`/`backlog`/`fast_open_qlen`, terminate certs,
+  `default_tls`, `api`, `log` and **`runtime`**, dropping every live connection.
+  Save diffs those parts against the config as loaded and confirms, naming what
+  changed; a plain `servers` edit saves without a prompt. Listener entries are
+  compared as a **sorted set** so a drag-reorder isn't a false alarm. The
+  baseline resets after a successful save.
 - **Version gate** — the router parses its config with `deny_unknown_fields`, so
-  `udp_idle` on a 1.7.x router **400s the entire `PUT`** and nothing is written.
+  a key it doesn't know **400s the entire `PUT`** and nothing is written.
   `VisualConfig` therefore fetches `GET /api/hosts/{id}/version` on every host
-  switch and only lists `udp_idle` in `timeoutKeys()` at `>= 1.8.0`; an
-  unreachable router (version `null`) counts as *too old*. Comparison is
-  numeric-segment (`verCmp`), not string — `1.10.0 > 1.8.0`. Hiding the field is
-  also what keeps the key out of the saved YAML: a pre-1.8.0 router never returns
-  it from `GET /config`, so the visual form is the only thing that could add it.
+  switch and gates per feature: `udp_idle` joins `timeoutKeys()` at `>= 1.8.0`,
+  the whole **Performance** card renders at `>= 1.9.0`; an unreachable router
+  (version `null`) counts as *too old*. Comparison is numeric-segment
+  (`verCmp`), not string — `1.10.0 > 1.8.0`. Hiding a field is also what keeps
+  the key out of the saved YAML: an older router never returns it from
+  `GET /config`, so the visual form is the only thing that could add it.
   (Manual YAML stays raw by design.)
 - **PROXY protocol over UDP** (config.md §3.3) has **no config key** — the router
   frames it per flow (QUIC: one leading header datagram; plain UDP: a header on

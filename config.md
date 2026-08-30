@@ -27,6 +27,7 @@ backends:    { ... }   # optional        — how the router talks to servers
 default_tls: { ... }   # optional        — shared cert for terminate backends
 timeouts:    { ... }   # optional        — global timeouts (seconds)
 limits:      { ... }   # optional        — resource limits
+runtime:     { ... }   # optional        — data-path tuning (1.9.0+)
 log:         { ... }   # optional        — logging
 api:         { ... }   # optional        — management + metrics API (one bind, one token)
 ```
@@ -550,6 +551,64 @@ Verify on a live connection: `ss -tno` shows `timer:(keepalive,…)`.
 | `max_client_hello` | int  | `16384` | max bytes buffered while reassembling a ClientHello. Must be ≥ 512 (error) and ≤ 1 MiB (warning above) |
 | `max_conns_per_ip` | int  | `0`     | max concurrent TCP connections per client IP (`0` = unlimited) |
 
+### 6.5 `runtime` (object, optional) — data-path tuning · **new in 1.9.0**
+
+Four knobs on the TCP passthrough data path. The router does `splice(2)` itself:
+while data is already there both moves are ordinary non-blocking syscalls, and
+io_uring is used only to **wait** for data or for room in the send buffer.
+
+**None of these can add latency.** The router never waits for a chunk to fill —
+a byte that arrived leaves immediately. They trade trips into the kernel for
+memory on bulk traffic. Every field applies on **restart** (re-exec, active
+connections drop).
+
+```yaml
+runtime:
+  io_uring_entries: 4096
+  splice_chunk: 65536
+  pipe_size: 65536
+  splice_spin: 8
+```
+
+| field | type | default | range | notes |
+|---|---|---|---|---|
+| `io_uring_entries` | int | `4096` | 256 … 32768 | queue depth **per CPU core**. Each direction of each live connection takes one slot; out of slots, the kernel falls back to a slower path. Rounded up to a power of two. ~96 bytes/slot/core (4096 ≈ 400 KiB per core) |
+| `splice_chunk` | int (bytes) | `65536` | 4096 … `pipe_size` | ceiling per move, **not** a wait. A megabyte costs `1 MiB ÷ splice_chunk` trips into the kernel |
+| `pipe_size` | int (bytes) | `65536` | 4096 … `fs.pipe-max-size` (usually 1 MiB); `0` = keep the kernel's | size of the intermediate pipe (`splice` can't go socket→socket). Must be ≥ `splice_chunk`. Over `fs.pipe-max-size` the kernel silently refuses and keeps the default — the real value is logged at startup on the `data path ready` line |
+| `splice_spin` | int (rounds) | `8` | 0 … ~64 (`0` acts as `1`) | how many moves in a row one connection gets before yielding the core. Lower = fairer with many connections; higher = fewer switches with a few very busy ones |
+
+**Pipe budget.** A passthrough connection holds **two** pipes (one per
+direction) and their pages count against `fs.pipe-user-pages-soft` (64 MiB by
+default). Once it's used up the kernel silently hands out minimal pipes — no
+error, no log line. So `pipe_size` divides the number of connections that get
+the full size:
+
+| `pipe_size` | connections before the kernel shrinks them |
+|---|---|
+| 64 KiB (default) | ~512 |
+| 128 KiB | ~256 |
+| 256 KiB | ~128 |
+| 1 MiB | ~32 |
+
+Need both a big pipe and many connections: raise `fs.pipe-user-pages-soft`.
+
+Presets (what the UI's buttons write):
+
+| | Defaults | Many connections | High throughput |
+|---|---|---|---|
+| `io_uring_entries` | 4096 | 16384 | 8192 |
+| `splice_chunk` | 65536 | 32768 | 262144 |
+| `pipe_size` | 65536 | 65536 | 262144 |
+| `splice_spin` | 8 | 2 | 32 |
+
+*Many connections* = thousands of clients, small packets (VPN, DNS, games).
+*High throughput* = dozens of clients each pulling gigabytes (files, video,
+mirrors).
+
+Compatibility: the config is parsed with `deny_unknown_fields`, so a router
+**1.8.x or older** answers **400** to any config carrying `runtime` and writes
+nothing. A config **without** `runtime` is valid on 1.9.0 (defaults apply).
+
 ---
 
 ## 7. `log` (object, optional)
@@ -676,6 +735,8 @@ Errors (exit non‑zero):
 12. `backlog` / `fast_open_qlen` are `> 0` when set.
 13. Timeouts `> 0` (except `keepalive`, where `0` = off); `max_client_hello ≥
     512`; valid `log.level`; valid `api.bind`.
+14. `runtime.io_uring_entries` `> 0` and ≤ 32768 (above it io_uring won't come
+    up and the worker never starts); `runtime.splice_chunk > 0`.
 
 Warnings (still exit `0`):
 
@@ -688,6 +749,14 @@ Warnings (still exit `0`):
 - Fields set but ignored for the chosen mode (see the applicability matrix).
 - A backend not referenced by any route.
 - Unusually large timeouts / buffer sizes.
+- `runtime.io_uring_entries` under 256 (raised to 256) or not a power of two
+  (the kernel rounds up).
+- `runtime.splice_chunk` under 4096, or above `runtime.pipe_size` (the move
+  still stops at the pipe).
+- `runtime.pipe_size` above `fs.pipe-max-size` (the kernel refuses and keeps
+  the default), or above 64 KiB — the warning carries the number of connections
+  the pipe budget still covers (§6.5).
+- `runtime.splice_spin` above 64.
 
 Optional network check: `sni-router -t --check-backends` additionally does a real
 TCP connect to each server (opt‑in side effect).
@@ -699,8 +768,10 @@ TCP connect to each server (opt‑in side effect).
 - **SIGHUP**: re‑reads and validates the file. On any error the old config keeps
   serving. Applies changes to routes/backends/timeouts/ACLs for **new**
   connections; live connections keep the config they started with (zero
-  downtime). If `bind`/`proto`/`fast_open`/`backlog`/`fast_open_qlen` changed, it instead **fast-restarts** in place
-  (re-exec, same PID) to apply the new listeners — active connections drop.
+  downtime). If the **restart signature** changed — listener
+  `bind`/`proto`/`fast_open`/`backlog`/`fast_open_qlen`, terminate-backend
+  certs, `default_tls`, `api`, `log`, or any `runtime` field — it instead
+  **fast-restarts** in place (re-exec, same PID) — active connections drop.
 - **SIGUSR1**: fast restart on demand — validate the config, then re-exec in
   place, dropping all connections and rebinding immediately (no drain). Use this
   as the quick "restart now" instead of stop+start.
@@ -819,6 +890,7 @@ Config {
   limits?: { max_client_hello, max_conns_per_ip }                   // ints
   log?: { level: enum, format: enum }
   api?: { bind: string, token?: string, tls?: { cert: string, key: string } }
+  runtime?: { io_uring_entries, splice_chunk, pipe_size, splice_spin }  // ints; 1.9.0+
 }
 
 Listener {
